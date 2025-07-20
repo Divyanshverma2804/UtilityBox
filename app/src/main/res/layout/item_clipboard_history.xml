@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:background="@drawable/clipboard_item_background"
+    android:padding="12dp"
+    android:layout_marginBottom="8dp"
+    android:clickable="true"
+    android:focusable="true">
+
+    <!-- Text content -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tv_clipboard_preview"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:text="Sample clipboard text that might be quite long..." />
+
+        <TextView
+            android:id="@+id/tv_clipboard_time"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#CCFFFFFF"
+            android:textSize="11sp"
+            android:layout_marginTop="4dp"
+            android:text="2m ago" />
+
+    </LinearLayout>
+
+    <!-- Delete button -->
+    <ImageButton
+        android:id="@+id/btn_delete_clipboard_item"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:src="@drawable/ic_delete"
+        android:background="@drawable/delete_button_background"
+        android:scaleType="centerInside"
+        android:padding="4dp"
+        android:layout_gravity="center_vertical"
+        android:layout_marginStart="8dp" />
+
+</LinearLayout>

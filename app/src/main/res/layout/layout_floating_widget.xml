@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/widget_background"
+    android:padding="4dp">
+
+    <!-- Main Widget (always visible) -->
+    <LinearLayout
+        android:id="@+id/main_widget"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:padding="8dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="📸"
+            android:textSize="20sp"
+            android:textColor="#00FFFF" />
+
+    </LinearLayout>
+
+    <!-- Expanded Buttons (hidden by default) -->
+    <LinearLayout
+        android:id="@+id/expanded_buttons"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:visibility="gone"
+        android:layout_marginTop="4dp">
+
+        <!-- Screenshot Region Button -->
+        <Button
+            android:id="@+id/btn_screenshot_region"
+            android:layout_width="120dp"
+            android:layout_height="40dp"
+            android:text="📸 Region"
+            android:textSize="12sp"
+            android:textColor="#FFFFFF"
+            android:background="@drawable/button_screenshot_bg"
+            android:layout_marginBottom="4dp" />
+
+        <!-- OCR Button -->
+        <Button
+            android:id="@+id/btn_ocr"
+            android:layout_width="120dp"
+            android:layout_height="40dp"
+            android:text="🔤 Extract Text"
+            android:textSize="12sp"
+            android:textColor="#FFFFFF"
+            android:background="@drawable/button_ocr_bg"
+            android:layout_marginBottom="4dp" />
+
+        <Button
+            android:id="@+id/btn_clipboard_history"
+            android:layout_width="120dp"
+            android:layout_height="36dp"
+            android:text="📋 Clipboard"
+            android:textSize="12sp"
+            android:background="@drawable/button_clipboard_bg"
+            android:textColor="#FFFFFF"
+            android:layout_marginBottom="4dp"
+            android:minHeight="0dp" />
+
+
+        <!-- Action Buttons Row -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <!-- Delete Button -->
+            <Button
+                android:id="@+id/btn_delete"
+                android:layout_width="56dp"
+                android:layout_height="40dp"
+                android:text="🗑️"
+                android:textSize="16sp"
+                android:textColor="#FFFFFF"
+                android:background="@drawable/button_delete_bg"
+                android:layout_marginEnd="4dp" />
+
+            <!-- Close Button -->
+            <Button
+                android:id="@+id/btn_close"
+                android:layout_width="56dp"
+                android:layout_height="40dp"
+                android:text="❌"
+                android:textSize="16sp"
+                android:textColor="#FFFFFF"
+                android:background="@drawable/button_close_bg" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+</LinearLayout>

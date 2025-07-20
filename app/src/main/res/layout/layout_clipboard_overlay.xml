@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/clipboard_overlay_background"
+    android:padding="16dp">
+
+    <!-- Header -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="12dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Clipboard History"
+            android:textSize="18sp"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btn_clear_all"
+            android:layout_width="wrap_content"
+            android:layout_height="32dp"
+            android:text="Clear All"
+            android:textSize="12sp"
+            android:background="@drawable/button_clear_background"
+            android:textColor="#FFFFFF"
+            android:minHeight="0dp"
+            android:layout_marginEnd="8dp" />
+
+        <ImageButton
+            android:id="@+id/btn_close_clipboard"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:src="@drawable/ic_close"
+            android:background="@drawable/close_button_background"
+            android:scaleType="centerInside"
+            android:padding="6dp" />
+
+    </LinearLayout>
+
+    <!-- RecyclerView for clipboard history -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rv_clipboard_history"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:maxHeight="400dp"
+        android:scrollbars="vertical" />
+
+    <!-- No items message -->
+    <TextView
+        android:id="@+id/tv_no_items"
+        android:layout_width="match_parent"
+        android:layout_height="100dp"
+        android:text="No clipboard history yet.\nCopy some text to see it here."
+        android:textColor="#CCFFFFFF"
+        android:textSize="14sp"
+        android:gravity="center"
+        android:visibility="gone" />
+
+</LinearLayout>
