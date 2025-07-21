@@ -13,6 +13,12 @@
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.READ_CLIPBOARD" />
+    <uses-permission android:name="android.permission.WRITE_CLIPBOARD" />
+    <uses-permission android:name="android.permission.READ_CLIPBOARD_IN_BACKGROUND"
+        tools:ignore="ProtectedPermissions"/>
+
+
 
     <!-- Features -->
     <uses-feature
@@ -39,6 +45,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+
+        <activity
+            android:name=".ClipboardHeartbeatActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:taskAffinity="">
+        </activity>
+
 
         <!-- FloatingWidgetService with media projection foreground service type -->
         <service
@@ -71,6 +87,20 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
+<!--        By implementing an AccessibilityService you get a privileged background context that can see clipboard changes system‑wide, even if your app UI is totally hidden behind other apps.-->
+
+        <service
+            android:name=".ClipboardAccessibilityService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
 
         <!-- File Provider for sharing screenshots -->
         <provider

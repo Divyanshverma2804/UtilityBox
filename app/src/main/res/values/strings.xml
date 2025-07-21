@@ -1,4 +1,8 @@
 <resources>
     <string name="app_name">UtilityBox</string>
-    <string name="accessibility_service_description">Allows the app to automatically paste clipboard content into text fields when you select an item from clipboard history.</string>
+<!--    <string name="accessibility_service_description">Allows the app to automatically paste clipboard content into text fields when you select an item from clipboard history.</string>-->
+    <string name="accessibility_service_description">
+  Clipboard monitor for UtilityBox
+    </string>
+
 </resources>
