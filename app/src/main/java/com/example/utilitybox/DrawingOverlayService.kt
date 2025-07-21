@@ -175,8 +175,7 @@ class DrawingOverlayService : Service() {
             event?.let { e ->
                 when (e.action) {
                     MotionEvent.ACTION_DOWN -> {
-                        if (hasSelection) {
-                            // If we already have a selection, capture it
+                        if (hasSelection && !hasCaptured) {
                             captureCurrentSelection()
                             return true
                         }
@@ -188,6 +187,7 @@ class DrawingOverlayService : Service() {
                         endY = e.y
                         isDrawing = true
                         hasSelection = false
+                        hasCaptured = false // reset before starting new selection
                         Log.d("TOUCH_DEBUG", "Started selection at: (${startX}, ${startY})")
                         invalidate()
                         return true
@@ -256,16 +256,17 @@ class DrawingOverlayService : Service() {
             android.util.Log.d("DrawingOverlay", "Sent CAPTURE_COMPLETE broadcast")
         }
 
-
+        private var hasCaptured = false
         private fun captureCurrentSelection() {
-            if (!hasSelection) return
+            if (!hasSelection || hasCaptured) return
+            hasCaptured = true
 
             val left = minOf(startX, endX).toInt()
             val top = minOf(startY, endY).toInt()
             val right = maxOf(startX, endX).toInt()
             val bottom = maxOf(startY, endY).toInt()
 
-            val rect = Rect(left, top, right, bottom)
+            val rect = Rect(left, top+100, right, bottom+100)
 
             Log.d("CAPTURE_DEBUG", "Capturing region: $rect")
             Log.d("CAPTURE_DEBUG", "Mode: $mode")
@@ -286,7 +287,7 @@ class DrawingOverlayService : Service() {
 
                 "ocr" -> {
                     // Show overlay to indicate what's being captured
-                    ScreenshotHelper.showOverlayRect(service, rect, 1000L)
+//                    ScreenshotHelper.showOverlayRect(service, rect, 1000L)
 
                     ScreenshotHelper.captureScreenshotForOCR(service, rect) { text ->
                         Handler(Looper.getMainLooper()).post {
