@@ -1,29 +1,28 @@
-<!-- AndroidManifest.xml -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     package="com.example.utilitybox">
 
-    <!-- Permissions -->
+    <!-- Required Permissions -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+
+    <!-- Required for media projection foreground service -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+
+    <!-- One of these is also required -->
+    <uses-permission android:name="android.permission.CAPTURE_VIDEO_OUTPUT"
+        tools:ignore="ProtectedPermissions" />
+    <!-- OR -->
+    <uses-permission android:name="android.permission.PROJECT_MEDIA" />
+<!--    <uses-permission android:name="android.permission.INTERNET" />-->
+
+    <!-- For older Android versions -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.READ_CLIPBOARD" />
-    <uses-permission android:name="android.permission.WRITE_CLIPBOARD" />
-    <uses-permission android:name="android.permission.READ_CLIPBOARD_IN_BACKGROUND"
-        tools:ignore="ProtectedPermissions"/>
-
-
-
-    <!-- Features -->
-    <uses-feature
-        android:name="android.hardware.camera"
-        android:required="false" />
 
     <application
         android:allowBackup="true"
@@ -35,7 +34,7 @@
         android:requestLegacyExternalStorage="true"
         tools:targetApi="31">
 
-        <!-- Main Activity -->
+        <!-- Launcher Activity -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -46,64 +45,20 @@
             </intent-filter>
         </activity>
 
-
-        <activity
-            android:name=".ClipboardHeartbeatActivity"
-            android:exported="false"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar"
-            android:excludeFromRecents="true"
-            android:taskAffinity="">
-        </activity>
-
-
-        <!-- FloatingWidgetService with media projection foreground service type -->
+        <!-- MediaProjection Foreground Service -->
         <service
             android:name=".FloatingWidgetService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
-        <!-- DrawingOverlayService -->
+        <!-- Drawing Overlay -->
         <service
             android:name=".DrawingOverlayService"
             android:enabled="true"
             android:exported="false" />
 
-        <!-- Clipboard Overlay Service -->
-        <service
-            android:name=".ClipboardOverlayService"
-            android:enabled="true"
-            android:exported="false" />
-
-        <!-- Accessibility Service for auto-paste -->
-        <service
-            android:name=".AccessibilityHelper"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service_config" />
-        </service>
-<!--        By implementing an AccessibilityService you get a privileged background context that can see clipboard changes system‑wide, even if your app UI is totally hidden behind other apps.-->
-
-        <service
-            android:name=".ClipboardAccessibilityService"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service_config" />
-        </service>
-
-
-
-        <!-- File Provider for sharing screenshots -->
+        <!-- File Provider (used for sharing screenshots) -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

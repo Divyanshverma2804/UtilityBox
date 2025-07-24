@@ -214,6 +214,16 @@ object ScreenshotHelper {
 
         val reader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
 
+//        -------
+        // Before calling createVirtualDisplay, register a callback
+        mediaProjection?.registerCallback(object : MediaProjection.Callback() {
+            override fun onStop() {
+                // Handle when media projection stops
+                Log.d("MediaProjection", "Media projection stopped")
+            }
+        }, null)
+//        -------
+
         // Create a fresh virtual display for OCR
         val vd = mediaProjection!!.createVirtualDisplay(
             "OCRCapture_${System.currentTimeMillis()}", // Unique name

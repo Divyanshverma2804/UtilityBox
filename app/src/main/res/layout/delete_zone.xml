@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:gravity="center">
+
+    <View
+        android:id="@+id/delete_circle"
+        android:layout_width="150dp"
+        android:layout_height="150dp"
+        android:layout_gravity="center"
+        android:background="@drawable/delete_zone_background"/>
+    <!-- Remove Cross Icon -->
+    <ImageView
+        android:id="@+id/remove_icon"
+        android:layout_width="50dp"
+        android:layout_height="50dp"
+        android:src="@drawable/ic_remove"
+        android:layout_gravity="center"
+        android:tint="@android:color/white"/>
+</FrameLayout>

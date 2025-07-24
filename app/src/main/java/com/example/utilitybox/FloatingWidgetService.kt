@@ -1,4 +1,4 @@
-// FloatingWidgetService.kt - Enhanced with smart clipboard refresh and focus toggling
+// FloatingWidgetService.kt - Enhanced with broadcast on service stop
 package com.example.utilitybox
 
 import android.app.NotificationChannel
@@ -13,65 +13,79 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import android.view.*
 import android.widget.Button
-import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import android.content.pm.ServiceInfo
-import android.provider.Settings
-import android.util.Log
 import androidx.annotation.RequiresApi
+import kotlin.math.pow
+import kotlin.math.sqrt
 
 class FloatingWidgetService : Service() {
 
+    companion object {
+        private const val TAG = "FloatingWidget"
+        private const val NOTIFICATION_CHANNEL_ID = "floating_widget_channel"
+        private const val NOTIFICATION_ID = 1001
+        private const val DOUBLE_TAP_TIMEOUT = 300L
+        private const val WIDGET_HIDE_TIMEOUT = 10000L // 10 seconds
+        private const val DRAG_THRESHOLD = 10
+        private const val CLICK_DURATION_THRESHOLD = 200L
+        private const val DELETE_ZONE_SIZE = 550
+        private const val DELETE_ZONE_MARGIN_BOTTOM = 100
+        private const val DELETE_ZONE_ANIMATION_DURATION = 300L
+        private const val DELETE_ZONE_HIDE_DELAY = 500L
+        private const val DELETE_DISTANCE_THRESHOLD = 1.5 // Division factor for delete zone width
+    }
+
+    // UI Components
     private lateinit var windowManager: WindowManager
     private lateinit var overlayView: View
     private lateinit var mainWidget: LinearLayout
     private lateinit var expandedButtons: LinearLayout
-    private lateinit var refreshButton: ImageButton
+    private lateinit var params: WindowManager.LayoutParams
+
+    // Delete Zone Components
+    private var deleteZone: View? = null
+    private lateinit var deleteParams: WindowManager.LayoutParams
+
+    // Widget State
     private var isExpanded = false
     private var lastTapTime = 0L
-    private val doubleTapTimeout = 300L
-
-    // Smart clipboard detection
-    private var lastClipboardCheck = 0L
-    private var isSmartDetectionEnabled = true
-    private val smartCheckInterval = 3000L // Check every 3 seconds when smart mode is on
-    private var smartDetectionHandler: Handler? = null
-
-    // Focus state management
-    private var isInFocusableMode = false
-    private var focusToggleHandler: Handler? = null
-    private val focusToggleDuration = 2000L // Keep focusable for 2 seconds
 
     // Dragging variables
     private var initialX = 0
     private var initialY = 0
     private var initialTouchX = 0f
     private var initialTouchY = 0f
-    private lateinit var params: WindowManager.LayoutParams
+    private var isDragging = false
+    private var dragStartTime = 0L
 
-    // Clipboard helper instance
-    private val clipboardHelper = ClipboardHelper.getInstance()
+    // Handlers
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private val TAG = "FloatingWidget"
-
-    // BroadcastReceiver to listen for capture completion and clipboard events
+    // BroadcastReceiver for capture completion events
     private val captureCompleteReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
                 "CAPTURE_COMPLETE" -> {
+                    Log.d(TAG, "📸 Capture completed - showing widget")
                     showWidget()
                 }
                 "SHOW_FLOATING_WIDGET" -> {
+                    Log.d(TAG, "🔄 Widget show requested")
                     showWidget()
                 }
-                "CLIPBOARD_MIGHT_HAVE_CHANGED" -> {
-                    Log.d(TAG, "🔔 Received clipboard change hint - triggering smart refresh")
-                    performSmartClipboardRefresh()
+                "OCR_COMPLETE" -> {
+                    Log.d(TAG, "📝 OCR completed - showing widget")
+                    showWidget()
+                    val extractedText = intent.getStringExtra("extracted_text")
+                    if (!extractedText.isNullOrEmpty()) {
+                        Toast.makeText(context, "✅ Text extracted: ${extractedText.take(50)}...", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }
@@ -80,24 +94,18 @@ class FloatingWidgetService : Service() {
     @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "Service onCreate started")
+        Log.i(TAG, "🚀 FloatingWidgetService starting...")
 
-//        // Create heartbeat activity
-//        val heartbeat = Intent(this, ClipboardHeartbeatActivity::class.java)
-//        heartbeat.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-//        startActivity(heartbeat)
+        initializeService()
+
+        Log.i(TAG, "✅ FloatingWidgetService initialized successfully")
+    }
+
+    private fun initializeService() {
+        Log.d(TAG, "⚙️ Initializing service components...")
 
         // Register broadcast receiver
-        val filter = IntentFilter().apply {
-            addAction("CAPTURE_COMPLETE")
-            addAction("SHOW_FLOATING_WIDGET")
-            addAction("CLIPBOARD_MIGHT_HAVE_CHANGED")
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(captureCompleteReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(captureCompleteReceiver, filter, RECEIVER_NOT_EXPORTED)
-        }
+        registerBroadcastReceiver()
 
         // Start as foreground service
         createNotificationChannel()
@@ -106,222 +114,124 @@ class FloatingWidgetService : Service() {
         // Set up the UI
         setupUI()
 
-        // Initialize clipboard helper
-        initializeClipboardHelper()
+        // Initialize delete zone
+        initializeDeleteZone()
 
-        // Start smart clipboard detection
-        startSmartClipboardDetection()
+        Log.d(TAG, "✅ All service components initialized")
+    }
 
-        Log.d(TAG, "Service onCreate completed")
+    private fun registerBroadcastReceiver() {
+        Log.d(TAG, "📡 Registering broadcast receivers...")
+
+        val filter = IntentFilter().apply {
+            addAction("CAPTURE_COMPLETE")
+            addAction("SHOW_FLOATING_WIDGET")
+            addAction("OCR_COMPLETE")
+        }
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(captureCompleteReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(captureCompleteReceiver, filter)
+            }
+            Log.d(TAG, "✅ Broadcast receivers registered successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to register broadcast receivers", e)
+        }
     }
 
     private fun setupUI() {
-        // Inflate the overlay view
-        overlayView = LayoutInflater.from(this).inflate(R.layout.layout_floating_widget, null)
-        mainWidget = overlayView.findViewById(R.id.main_widget)
-        expandedButtons = overlayView.findViewById(R.id.expanded_buttons)
-        refreshButton = overlayView.findViewById(R.id.btn_refresh_clipboard)
+        Log.d(TAG, "🎨 Setting up UI components...")
 
-        setupLayoutParams()
-        setupTouchListener()
-        setupButtonClickListeners()
+        try {
+            // Get window manager
+            windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
 
-        // Add overlay to window
-        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        windowManager.addView(overlayView, params)
+            // Inflate the overlay view
+            overlayView = LayoutInflater.from(this).inflate(R.layout.layout_floating_widget, null)
+            mainWidget = overlayView.findViewById(R.id.main_widget)
+            expandedButtons = overlayView.findViewById(R.id.expanded_buttons)
 
-        Log.d(TAG, "UI setup completed")
+            setupLayoutParams()
+            setupTouchListener()
+            setupButtonClickListeners()
+
+            // Add overlay to window
+            windowManager.addView(overlayView, params)
+
+            Log.d(TAG, "✅ UI setup completed successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to setup UI", e)
+            throw e
+        }
     }
 
     private fun setupLayoutParams() {
+        Log.d(TAG, "📐 Configuring layout parameters...")
+
         params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else WindowManager.LayoutParams.TYPE_PHONE,
-            // Start with non-focusable for best UX
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         )
 
         params.gravity = Gravity.TOP or Gravity.START
         params.x = 100
         params.y = 100
+
+        Log.d(TAG, "✅ Layout parameters configured")
     }
 
-
-
-    private fun toggleFocusMode(enableFocus: Boolean, duration: Long = focusToggleDuration) {
-        Log.d(TAG, "🎯 Toggling focus mode: enableFocus=$enableFocus, duration=$duration")
+    private fun initializeDeleteZone() {
+        Log.d(TAG, "🗑️ Initializing delete zone...")
 
         try {
-            // Common flags
-            val baseFlags = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
+            deleteZone = LayoutInflater.from(this).inflate(R.layout.delete_zone, null)
+            deleteZone?.visibility = View.GONE
 
-            params.flags = if (enableFocus) {
-                baseFlags or WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
-            } else {
-                baseFlags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-            }
+            val windowType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else WindowManager.LayoutParams.TYPE_PHONE
 
-            windowManager.updateViewLayout(overlayView, params)
-            isInFocusableMode = enableFocus
+            deleteParams = WindowManager.LayoutParams(
+                DELETE_ZONE_SIZE,
+                DELETE_ZONE_SIZE,
+                windowType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                PixelFormat.TRANSLUCENT
+            )
 
-            updateRefreshButtonState(enableFocus)
+            deleteParams.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            deleteParams.y = DELETE_ZONE_MARGIN_BOTTOM
 
-            Log.d(TAG, "✅ Switched to ${if (enableFocus) "FOCUSABLE" else "NON-FOCUSABLE"} mode")
+            windowManager.addView(deleteZone, deleteParams)
 
-            // Schedule toggle back if needed
-            focusToggleHandler?.removeCallbacksAndMessages(null)
-            if (enableFocus) {
-                focusToggleHandler = Handler(Looper.getMainLooper())
-                focusToggleHandler?.postDelayed({
-                    toggleFocusMode(false, 0)
-                }, duration)
-            }
-
+            Log.d(TAG, "✅ Delete zone initialized successfully")
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Error toggling focus mode: ${e.message}", e)
-        }
-    }
-
-    private fun updateRefreshButtonState(isRefreshing: Boolean) {
-        mainHandler.post {
-            if (isRefreshing) {
-                refreshButton.alpha = 1.0f
-                refreshButton.setBackgroundResource(R.drawable.ic_refresh_active) // You'll need this drawable
-            } else {
-                refreshButton.alpha = 0.7f
-                refreshButton.setBackgroundResource(R.drawable.ic_refresh) // You'll need this drawable
-            }
-        }
-    }
-
-    private fun performManualClipboardRefresh() {
-        Log.d(TAG, "🔄 Manual clipboard refresh triggered")
-
-        if (isInFocusableMode) {
-            Log.d(TAG, "Already in focusable mode, just refreshing clipboard")
-            refreshClipboardData()
-            return
-        }
-
-        // Toggle to focusable mode temporarily
-        toggleFocusMode(true, 2500L) // Give extra time for manual refresh
-
-        // Wait a bit for focus change to take effect, then refresh
-        mainHandler.postDelayed({
-            refreshClipboardData()
-        }, 200)
-
-        Toast.makeText(this, "🔄 Refreshing clipboard...", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun performSmartClipboardRefresh() {
-        Log.d(TAG, "🧠 Smart clipboard refresh triggered")
-
-        val currentTime = System.currentTimeMillis()
-
-        // Avoid too frequent smart refreshes
-        if (currentTime - lastClipboardCheck < 1000) {
-            Log.d(TAG, "Smart refresh too soon, skipping")
-            return
-        }
-
-        lastClipboardCheck = currentTime
-
-        if (!isInFocusableMode) {
-            // Quick toggle for smart refresh
-            toggleFocusMode(true, 1500L)
-
-            mainHandler.postDelayed({
-                refreshClipboardData()
-            }, 100)
-        } else {
-            // Already focusable, just refresh
-            refreshClipboardData()
-        }
-    }
-
-    private fun refreshClipboardData() {
-        Log.d(TAG, "📋 Refreshing clipboard data...")
-
-        try {
-            if (!clipboardHelper.isInitialized()) {
-                Log.w(TAG, "ClipboardHelper not initialized, initializing now")
-                clipboardHelper.initialize(applicationContext)
-                return
-            }
-
-            // Force check current clipboard content
-            clipboardHelper.forceCheckClipboard()
-
-//            // Trigger heartbeat activity for additional access
-//            val heartbeat = Intent(this, ClipboardHeartbeatActivity::class.java)
-//            heartbeat.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
-//            heartbeat.putExtra("action", "clipboard_refresh")
-//            startActivity(heartbeat)
-
-            val historySize = clipboardHelper.getHistory().size
-            Log.d(TAG, "✅ Clipboard refreshed. History size: $historySize")
-
-            if (historySize > 0) {
-                Toast.makeText(this, "📋 Found ${historySize} clipboard items", Toast.LENGTH_SHORT).show()
-            }
-
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ Error refreshing clipboard: ${e.message}", e)
-        }
-    }
-
-    private fun startSmartClipboardDetection() {
-        Log.d(TAG, "🧠 Starting smart clipboard detection")
-
-        smartDetectionHandler = Handler(Looper.getMainLooper())
-
-        val smartDetectionRunnable = object : Runnable {
-            override fun run() {
-                if (isSmartDetectionEnabled && !isInFocusableMode) {
-                    // Only do smart detection when we're in non-focusable mode
-                    detectClipboardActivity()
-                }
-
-                // Schedule next check
-                smartDetectionHandler?.postDelayed(this, smartCheckInterval)
-            }
-        }
-
-        // Start the detection loop
-        smartDetectionHandler?.postDelayed(smartDetectionRunnable, smartCheckInterval)
-    }
-
-    private fun detectClipboardActivity() {
-        // This is where we can add heuristics to detect when clipboard might have changed
-        // For now, we'll use a simple time-based approach, but you can enhance this
-
-        val currentTime = System.currentTimeMillis()
-
-        // If it's been a while since last check and user might be active, do a smart refresh
-        if (currentTime - lastClipboardCheck > 10000) { // 10 seconds
-            Log.d(TAG, "🔍 Smart detection: Performing periodic clipboard check")
-            performSmartClipboardRefresh()
+            Log.e(TAG, "❌ Failed to initialize delete zone", e)
         }
     }
 
     private fun setupTouchListener() {
-        var isDragging = false
+        Log.d(TAG, "👆 Setting up touch listeners...")
 
         overlayView.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    Log.v(TAG, "👇 Touch down detected")
                     initialX = params.x
                     initialY = params.y
                     initialTouchX = event.rawX
                     initialTouchY = event.rawY
                     isDragging = false
+                    dragStartTime = System.currentTimeMillis()
                     true
                 }
 
@@ -329,36 +239,138 @@ class FloatingWidgetService : Service() {
                     val deltaX = event.rawX - initialTouchX
                     val deltaY = event.rawY - initialTouchY
 
-                    if (Math.abs(deltaX) > 10 || Math.abs(deltaY) > 10) {
-                        isDragging = true
-                        params.x = initialX + deltaX.toInt()
-                        params.y = initialY + deltaY.toInt()
+                    if (Math.abs(deltaX) > DRAG_THRESHOLD || Math.abs(deltaY) > DRAG_THRESHOLD) {
+                        if (!isDragging) {
+                            Log.d(TAG, "🔄 Drag started - showing delete zone")
+                            isDragging = true
+                            showDeleteZone()
+                        }
+
+                        params.x = (initialX + deltaX).toInt()
+                        params.y = (initialY + deltaY).toInt()
                         windowManager.updateViewLayout(overlayView, params)
+                        Log.v(TAG, "📍 Widget moved to (${params.x}, ${params.y})")
                     }
                     true
                 }
 
                 MotionEvent.ACTION_UP -> {
-                    if (!isDragging) {
-                        handleTap()
-                    }
-                    isDragging = false
+                    Log.d(TAG, "👆 Touch up detected")
+                    endDrag()
                     true
                 }
 
                 else -> false
             }
         }
+
+        Log.d(TAG, "✅ Touch listeners configured")
+    }
+
+    private fun endDrag() {
+        val clickDuration = System.currentTimeMillis() - dragStartTime
+        Log.d(TAG, "🛑 Ending drag - duration: ${clickDuration}ms, isDragging: $isDragging")
+
+        if (clickDuration < CLICK_DURATION_THRESHOLD && !isDragging) {
+            Log.d(TAG, "👆 Quick tap detected - handling as click")
+            handleTap()
+        }
+
+        if (isDragging) {
+            if (isInDeleteZone()) {
+                Log.i(TAG, "🗑️ Widget dropped in delete zone - removing widget")
+                removeWidget()
+            } else {
+                Log.d(TAG, "📍 Widget dropped outside delete zone")
+                hideDeleteZone()
+            }
+        }
+
+        isDragging = false
+    }
+
+    private fun isInDeleteZone(): Boolean {
+        if (deleteZone == null) {
+            Log.w(TAG, "⚠️ Delete zone is null, cannot check position")
+            return false
+        }
+
+        try {
+            val deleteLocation = IntArray(2)
+            deleteZone!!.getLocationOnScreen(deleteLocation)
+            val deleteCenterX = deleteLocation[0] + deleteZone!!.width / 2
+            val deleteCenterY = deleteLocation[1] + deleteZone!!.height / 2
+
+            val widgetLocation = IntArray(2)
+            overlayView.getLocationOnScreen(widgetLocation)
+            val widgetCenterX = widgetLocation[0] + overlayView.width / 2
+            val widgetCenterY = widgetLocation[1] + overlayView.height / 2
+
+            val distance = sqrt(
+                (widgetCenterX - deleteCenterX).toDouble().pow(2.0) +
+                        (widgetCenterY - deleteCenterY).toDouble().pow(2.0)
+            )
+
+            val threshold = deleteZone!!.width / DELETE_DISTANCE_THRESHOLD
+            val isInZone = distance < threshold
+
+            Log.d(TAG, "🎯 Delete zone check - distance: $distance, threshold: $threshold, inZone: $isInZone")
+            return isInZone
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error checking delete zone position", e)
+            return false
+        }
+    }
+
+    private fun showDeleteZone() {
+        deleteZone?.let { zone ->
+            if (zone.visibility == View.GONE) {
+                Log.d(TAG, "🗑️ Showing delete zone with animation")
+                zone.visibility = View.VISIBLE
+                zone.alpha = 0f
+                zone.animate()
+                    .alpha(1f)
+                    .setDuration(DELETE_ZONE_ANIMATION_DURATION)
+                    .start()
+            }
+        } ?: Log.w(TAG, "⚠️ Cannot show delete zone - it's null")
+    }
+
+    private fun hideDeleteZone() {
+        deleteZone?.let { zone ->
+            Log.d(TAG, "🗑️ Hiding delete zone with animation")
+            mainHandler.postDelayed({
+                zone.animate()
+                    .alpha(0f)
+                    .setDuration(DELETE_ZONE_ANIMATION_DURATION)
+                    .withEndAction {
+                        zone.visibility = View.GONE
+                        Log.d(TAG, "✅ Delete zone hidden")
+                    }
+                    .start()
+            }, DELETE_ZONE_HIDE_DELAY)
+        } ?: Log.w(TAG, "⚠️ Cannot hide delete zone - it's null")
+    }
+
+    private fun removeWidget() {
+        Log.i(TAG, "🗑️ Removing widget - stopping service")
+        Toast.makeText(this, "🗑️ Widget removed", Toast.LENGTH_SHORT).show()
+
+        // Send broadcast to MainActivity to update UI
+        notifyMainActivity()
+
+        stopSelf()
     }
 
     private fun handleTap() {
         val currentTime = System.currentTimeMillis()
 
-        if (currentTime - lastTapTime < doubleTapTimeout) {
-            // Double tap - activate widget
+        if (currentTime - lastTapTime < DOUBLE_TAP_TIMEOUT) {
+            Log.d(TAG, "👆👆 Double tap detected - activating widget")
             activateWidget()
         } else {
-            // Single tap - fold/unfold
+            Log.d(TAG, "👆 Single tap detected - toggling widget")
             toggleWidget()
         }
 
@@ -366,286 +378,289 @@ class FloatingWidgetService : Service() {
     }
 
     private fun activateWidget() {
+        Log.d(TAG, "🎯 Activating widget (full expand)")
+
         overlayView.alpha = 1.0f
         expandedButtons.visibility = View.VISIBLE
         isExpanded = true
-        Toast.makeText(this, "Widget Activated", Toast.LENGTH_SHORT).show()
+
+        Toast.makeText(this, "📱 Widget Activated", Toast.LENGTH_SHORT).show()
+        Log.i(TAG, "✅ Widget fully activated")
     }
 
     private fun toggleWidget() {
         if (isExpanded) {
+            Log.d(TAG, "📉 Collapsing widget")
             expandedButtons.visibility = View.GONE
             overlayView.alpha = 0.3f
             isExpanded = false
         } else {
+            Log.d(TAG, "📈 Semi-expanding widget")
             overlayView.alpha = 0.7f
         }
+
+        Log.d(TAG, "🔄 Widget toggle completed - expanded: $isExpanded")
     }
 
     private fun setupButtonClickListeners() {
-        // Clipboard refresh button (NEW)
-        refreshButton.setOnClickListener {
-            Log.d(TAG, "🔄 Refresh button clicked")
-            performManualClipboardRefresh()
-        }
-
-        // Long press on refresh button to toggle smart detection
-        refreshButton.setOnLongClickListener {
-            isSmartDetectionEnabled = !isSmartDetectionEnabled
-            val status = if (isSmartDetectionEnabled) "enabled" else "disabled"
-            Toast.makeText(this, "Smart clipboard detection $status", Toast.LENGTH_SHORT).show()
-            Log.d(TAG, "🧠 Smart detection toggled: $isSmartDetectionEnabled")
-            true
-        }
+        Log.d(TAG, "🔘 Setting up button click listeners...")
 
         // Screenshot region button
-        overlayView.findViewById<Button>(R.id.btn_screenshot_region).setOnClickListener {
-            if (ScreenshotHelper.isMediaProjectionReady()) {
-                startRegionCapture()
-            } else {
-                Toast.makeText(this, "Media projection not ready. Please restart app.", Toast.LENGTH_LONG).show()
-            }
+        overlayView.findViewById<Button>(R.id.btn_screenshot_region)?.setOnClickListener {
+            Log.i(TAG, "📸 Screenshot button clicked")
+            handleScreenshotRequest()
         }
 
         // OCR button
-        overlayView.findViewById<Button>(R.id.btn_ocr).setOnClickListener {
-            if (ScreenshotHelper.isMediaProjectionReady()) {
-                startOCRCapture()
-                Log.d(TAG, "After OCR complete Triggering Manual Clipboard Refresh >>")
-                performManualClipboardRefresh()
-            } else {
-                Toast.makeText(this, "Media projection not ready. Please restart app.", Toast.LENGTH_LONG).show()
-            }
+        overlayView.findViewById<Button>(R.id.btn_ocr)?.setOnClickListener {
+            Log.i(TAG, "📝 OCR button clicked")
+            handleOCRRequest()
         }
 
-        // Clipboard History button
-        overlayView.findViewById<Button>(R.id.btn_clipboard_history).setOnClickListener {
-            Log.d(TAG, "📋 Clipboard History button clicked")
-
-            // Force refresh before opening history
-            if (!isInFocusableMode) {
-                performSmartClipboardRefresh()
-                // Delay opening history to allow refresh
-                mainHandler.postDelayed({
-                    openClipboardHistory()
-                }, 500)
-            } else {
-                refreshClipboardData()
-                mainHandler.postDelayed({
-                    openClipboardHistory()
-                }, 200)
-            }
-        }
-
-        // Close button
-        overlayView.findViewById<Button>(R.id.btn_close).setOnClickListener {
-            stopSelf()
-        }
-
-        // Delete button (long press to delete)
-        overlayView.findViewById<Button>(R.id.btn_delete).setOnLongClickListener {
-            stopSelf()
-            true
-        }
+        Log.d(TAG, "✅ Button click listeners configured")
     }
 
-    private fun openClipboardHistory() {
-        Log.d(TAG, "=== OPENING CLIPBOARD HISTORY ===")
+    private fun handleScreenshotRequest() {
+        Log.d(TAG, "📸 Processing screenshot request...")
 
-        val history = clipboardHelper.getHistory()
-        Log.d(TAG, "Current clipboard history size: ${history.size}")
-
-        if (!clipboardHelper.isInitialized()) {
-            Log.w(TAG, "❌ ClipboardHelper not initialized")
-            Toast.makeText(this, "Clipboard service not ready. Please try refresh button.", Toast.LENGTH_SHORT).show()
+        if (!ScreenshotHelper.isMediaProjectionReady()) {
+            Log.w(TAG, "⚠️ MediaProjection not ready")
+            Toast.makeText(this, "⚠️ Screen capture not ready. Please restart app.", Toast.LENGTH_LONG).show()
             return
         }
 
-        if (history.isEmpty()) {
-            Log.d(TAG, "❌ Clipboard history is empty")
-            Toast.makeText(this, "No clipboard history. Try copying some text first, then use refresh button.", Toast.LENGTH_LONG).show()
+        try {
+            Log.d(TAG, "🚀 Starting region capture...")
+            startRegionCapture()
+            Log.i(TAG, "✅ Screenshot capture initiated successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to start screenshot capture", e)
+            Toast.makeText(this, "❌ Failed to start screenshot", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun handleOCRRequest() {
+        Log.d(TAG, "📝 Processing OCR request...")
+
+        if (!ScreenshotHelper.isMediaProjectionReady()) {
+            Log.w(TAG, "⚠️ MediaProjection not ready for OCR")
+            Toast.makeText(this, "⚠️ Screen capture not ready. Please restart app.", Toast.LENGTH_LONG).show()
             return
         }
 
-        Log.d(TAG, "✅ Found ${history.size} clipboard items")
-
-        // Check accessibility service
-        val isAccessibilityEnabled = AccessibilityUtils.isAccessibilityServiceEnabled(this)
-        if (!isAccessibilityEnabled) {
-            Toast.makeText(this, "Enable Accessibility Service for auto-paste", Toast.LENGTH_LONG).show()
-        }
-
-        // Start clipboard overlay
         try {
-            val intent = Intent(this, ClipboardOverlayService::class.java)
-            startService(intent)
-            Log.d(TAG, "✅ Started ClipboardOverlayService")
-
-            // Hide this widget temporarily
-            overlayView.visibility = View.INVISIBLE
-
-            // Show widget again after timeout
-            mainHandler.postDelayed({
-                if (overlayView.visibility == View.INVISIBLE) {
-                    Log.d(TAG, "Fallback: Showing widget again after timeout")
-                    showWidget()
-                }
-            }, 1500)
-
+            Log.d(TAG, "🚀 Starting OCR capture...")
+            startOCRCapture()
+            Log.i(TAG, "✅ OCR capture initiated successfully")
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to start ClipboardOverlayService: ${e.message}", e)
-            Toast.makeText(this, "Failed to open clipboard history", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun initializeClipboardHelper() {
-        Log.d(TAG, "=== INITIALIZING CLIPBOARD HELPER IN SERVICE ===")
-
-        mainHandler.post {
-            try {
-                if (!AccessibilityUtils.isAccessibilityServiceEnabled(this)) {
-                    Toast.makeText(this, "Please enable Clipboard Accessibility service in Settings → Accessibility.", Toast.LENGTH_LONG).show()
-                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                } else {
-                    clipboardHelper.initialize(applicationContext)
-
-                    clipboardHelper.setOnHistoryChangedCallback {
-                        Log.d(TAG, "📋 Clipboard history changed! New size: ${clipboardHelper.getHistory().size}")
-                    }
-
-                    Log.d(TAG, "✅ Clipboard helper initialized in service")
-
-                    mainHandler.postDelayed({
-                        checkClipboardStatus()
-                    }, 2000)
-                }
-
-            } catch (e: Exception) {
-                Log.e(TAG, "❌ Error initializing clipboard helper: ${e.message}", e)
-            }
-        }
-    }
-
-    private fun checkClipboardStatus() {
-        Log.d(TAG, "=== CHECKING CLIPBOARD STATUS ===")
-        try {
-            val isInitialized = clipboardHelper.isInitialized()
-            val historySize = clipboardHelper.getHistory().size
-            Log.d(TAG, "Clipboard initialized: $isInitialized, History size: $historySize")
-            clipboardHelper.debugState()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error checking clipboard status: ${e.message}")
+            Log.e(TAG, "❌ Failed to start OCR capture", e)
+            Toast.makeText(this, "❌ Failed to start text extraction", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun startRegionCapture() {
-        val intent = Intent(this, DrawingOverlayService::class.java)
-        intent.putExtra("mode", "screenshot")
-        startService(intent)
-        overlayView.visibility = View.INVISIBLE
+        Log.d(TAG, "📸 Launching DrawingOverlayService for screenshot...")
 
-        mainHandler.postDelayed({
-            if (overlayView.visibility == View.INVISIBLE) {
-                showWidget()
-            }
-        }, 10000)
+        val intent = Intent(this, DrawingOverlayService::class.java).apply {
+            putExtra("mode", "screenshot")
+        }
+
+        startService(intent)
+        hideWidgetTemporarily("screenshot capture")
     }
 
     private fun startOCRCapture() {
-        val intent = Intent(this, DrawingOverlayService::class.java)
-        intent.putExtra("mode", "ocr")
+        Log.d(TAG, "📝 Launching DrawingOverlayService for OCR...")
+
+        val intent = Intent(this, DrawingOverlayService::class.java).apply {
+            putExtra("mode", "ocr")
+        }
+
         startService(intent)
+        hideWidgetTemporarily("OCR capture")
+    }
+
+    private fun hideWidgetTemporarily(reason: String) {
+        Log.d(TAG, "👻 Hiding widget temporarily for $reason")
+
         overlayView.visibility = View.INVISIBLE
 
+        // Show widget again after timeout as fallback
         mainHandler.postDelayed({
             if (overlayView.visibility == View.INVISIBLE) {
+                Log.d(TAG, "⏰ Timeout reached - showing widget again (fallback)")
                 showWidget()
             }
-        }, 10000)
+        }, WIDGET_HIDE_TIMEOUT)
     }
 
     fun showWidget() {
-        overlayView.visibility = View.VISIBLE
-        expandedButtons.visibility = View.GONE
-        overlayView.alpha = 0.7f
-        isExpanded = false
-        Log.d(TAG, "Widget shown")
+        Log.d(TAG, "👁️ Showing widget")
+
+        mainHandler.post {
+            overlayView.visibility = View.VISIBLE
+            expandedButtons.visibility = View.GONE
+            overlayView.alpha = 0.7f
+            isExpanded = false
+
+            // Hide delete zone if it's showing
+            deleteZone?.let { zone ->
+                if (zone.visibility == View.VISIBLE) {
+                    zone.visibility = View.GONE
+                    Log.d(TAG, "🗑️ Delete zone hidden during widget show")
+                }
+            }
+        }
+
+        Log.d(TAG, "✅ Widget shown and reset to default state")
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel("ss_channel", "Screenshot Overlay", NotificationManager.IMPORTANCE_LOW)
+            Log.d(TAG, "📢 Creating notification channel...")
+
+            val channel = NotificationChannel(
+                NOTIFICATION_CHANNEL_ID,
+                "Floating Widget Service",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Floating overlay for screenshots and OCR"
+                setShowBadge(false)
+            }
+
             val manager = getSystemService(NotificationManager::class.java)
             manager?.createNotificationChannel(channel)
+
+            Log.d(TAG, "✅ Notification channel created")
         }
     }
 
     private fun startForegroundService() {
-        val notification = NotificationCompat.Builder(this, "ss_channel")
-            .setContentTitle("Screenshot Service")
-            .setContentText("Floating overlay running")
+        Log.d(TAG, "🔔 Starting foreground service...")
+
+        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle("Floating Widget Active")
+            .setContentText("Screenshot and text extraction tools available")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setOngoing(true)
+            .setShowWhen(false)
             .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
-        } else {
-            startForeground(1, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            Log.d(TAG, "✅ Foreground service started successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to start foreground service", e)
+            throw e
         }
-        Log.d(TAG, "Started as foreground service")
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        Log.d(TAG, "=== SERVICE DESTROY ===")
-
-        // Stop smart detection
-        smartDetectionHandler?.removeCallbacksAndMessages(null)
-        focusToggleHandler?.removeCallbacksAndMessages(null)
+    private fun notifyMainActivity() {
+        Log.d(TAG, "📢 Sending broadcast to MainActivity about service stop")
 
         try {
-            unregisterReceiver(captureCompleteReceiver)
+            val intent = Intent("WIDGET_SERVICE_STOPPED")
+            sendBroadcast(intent)
+            Log.d(TAG, "✅ Broadcast sent successfully")
         } catch (e: Exception) {
-            Log.e(TAG, "Error unregistering receiver: ${e.message}")
+            Log.e(TAG, "❌ Failed to send broadcast", e)
         }
-
-        clipboardHelper.cleanup()
-
-        if (::windowManager.isInitialized && ::overlayView.isInitialized) {
-            windowManager.removeView(overlayView)
-        }
-
-        sendBroadcast(Intent("action.STOP_HEARTBEAT"))
-        Log.d(TAG, "Service destroyed")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "onStartCommand: ${intent?.action}")
+        Log.d(TAG, "🎯 onStartCommand called with action: ${intent?.action}")
 
         when (intent?.action) {
             "INIT_PROJECTION" -> {
-                val rc = intent.getIntExtra("resultCode", 0)
-                val data = intent.getParcelableExtra<Intent>("dataIntent")!!
+                Log.i(TAG, "🎬 Initializing MediaProjection...")
 
-                mainHandler.postDelayed({
-                    ScreenshotHelper.setMediaProjection(context = this, resultCode = rc, data = data)
-                    if (!ScreenshotHelper.isMediaProjectionReady()) {
-                        Log.e(TAG, "MediaProjection failed to initialize")
-                        Toast.makeText(this, "Failed to initialize screen capture", Toast.LENGTH_LONG).show()
-                    } else {
-                        Log.d(TAG, "MediaProjection initialized successfully")
-                    }
-                }, 1000)
+                val resultCode = intent.getIntExtra("resultCode", 0)
+                val dataIntent = intent.getParcelableExtra<Intent>("dataIntent")
+
+                if (dataIntent != null) {
+                    mainHandler.postDelayed({
+                        try {
+                            ScreenshotHelper.setMediaProjection(
+                                context = this,
+                                resultCode = resultCode,
+                                data = dataIntent
+                            )
+
+                            if (ScreenshotHelper.isMediaProjectionReady()) {
+                                Log.i(TAG, "✅ MediaProjection initialized successfully")
+                                Toast.makeText(this, "✅ Screen capture ready", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Log.e(TAG, "❌ MediaProjection initialization failed")
+                                Toast.makeText(this, "❌ Failed to initialize screen capture", Toast.LENGTH_LONG).show()
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "❌ Exception during MediaProjection initialization", e)
+                        }
+                    }, 1000)
+                } else {
+                    Log.e(TAG, "❌ DataIntent is null for MediaProjection initialization")
+                }
+            }
+            "show_widget" -> {
+                Log.d(TAG, "👁️ Show widget action received")
+                showWidget()
             }
             else -> {
-                if (intent?.getStringExtra("action") == "show_widget") {
-                    showWidget()
-                }
+                Log.d(TAG, "ℹ️ Standard service start")
             }
         }
 
         return START_STICKY
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onDestroy() {
+        super.onDestroy()
+        Log.i(TAG, "🛑 FloatingWidgetService shutting down...")
+
+        // Notify MainActivity that service is stopping
+        notifyMainActivity()
+
+        try {
+            // Unregister broadcast receiver
+            unregisterReceiver(captureCompleteReceiver)
+            Log.d(TAG, "✅ Broadcast receiver unregistered")
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ Error unregistering broadcast receiver", e)
+        }
+
+        try {
+            // Remove overlay view
+            if (::windowManager.isInitialized && ::overlayView.isInitialized) {
+                windowManager.removeView(overlayView)
+                Log.d(TAG, "✅ Overlay view removed")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ Error removing overlay view", e)
+        }
+
+        try {
+            // Remove delete zone
+            deleteZone?.let { zone ->
+                windowManager.removeView(zone)
+                deleteZone = null
+                Log.d(TAG, "✅ Delete zone removed")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ Error removing delete zone", e)
+        }
+
+        // Clear handlers
+        mainHandler.removeCallbacksAndMessages(null)
+
+        Log.i(TAG, "✅ FloatingWidgetService destroyed successfully")
+    }
+
+    override fun onBind(intent: Intent?): IBinder? {
+        Log.d(TAG, "🔗 onBind called - returning null (unbound service)")
+        return null
+    }
 }
