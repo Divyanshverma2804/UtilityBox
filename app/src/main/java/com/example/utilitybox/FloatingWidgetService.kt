@@ -1,4 +1,4 @@
-// FloatingWidgetService.kt - Updated with proper clipboard initialization
+// FloatingWidgetService.kt - Enhanced with smart clipboard refresh and focus toggling
 package com.example.utilitybox
 
 import android.app.NotificationChannel
@@ -15,6 +15,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.view.*
 import android.widget.Button
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
@@ -29,9 +30,21 @@ class FloatingWidgetService : Service() {
     private lateinit var overlayView: View
     private lateinit var mainWidget: LinearLayout
     private lateinit var expandedButtons: LinearLayout
+    private lateinit var refreshButton: ImageButton
     private var isExpanded = false
     private var lastTapTime = 0L
     private val doubleTapTimeout = 300L
+
+    // Smart clipboard detection
+    private var lastClipboardCheck = 0L
+    private var isSmartDetectionEnabled = true
+    private val smartCheckInterval = 3000L // Check every 3 seconds when smart mode is on
+    private var smartDetectionHandler: Handler? = null
+
+    // Focus state management
+    private var isInFocusableMode = false
+    private var focusToggleHandler: Handler? = null
+    private val focusToggleDuration = 2000L // Keep focusable for 2 seconds
 
     // Dragging variables
     private var initialX = 0
@@ -46,16 +59,19 @@ class FloatingWidgetService : Service() {
 
     private val TAG = "FloatingWidget"
 
-    // BroadcastReceiver to listen for capture completion
+    // BroadcastReceiver to listen for capture completion and clipboard events
     private val captureCompleteReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
                 "CAPTURE_COMPLETE" -> {
                     showWidget()
                 }
-
                 "SHOW_FLOATING_WIDGET" -> {
                     showWidget()
+                }
+                "CLIPBOARD_MIGHT_HAVE_CHANGED" -> {
+                    Log.d(TAG, "🔔 Received clipboard change hint - triggering smart refresh")
+                    performSmartClipboardRefresh()
                 }
             }
         }
@@ -66,19 +82,16 @@ class FloatingWidgetService : Service() {
         super.onCreate()
         Log.d(TAG, "Service onCreate started")
 
+//        // Create heartbeat activity
+//        val heartbeat = Intent(this, ClipboardHeartbeatActivity::class.java)
+//        heartbeat.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+//        startActivity(heartbeat)
 
-        Log.d("Heartbeat Craft", "creating Heartbeat activity from floating widget .oncreate() ")
-
-        val heartbeat = Intent(this, ClipboardHeartbeatActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        startActivity(heartbeat)
-
-
-
-        // Register broadcast receiver first
+        // Register broadcast receiver
         val filter = IntentFilter().apply {
             addAction("CAPTURE_COMPLETE")
             addAction("SHOW_FLOATING_WIDGET")
+            addAction("CLIPBOARD_MIGHT_HAVE_CHANGED")
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(captureCompleteReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -86,15 +99,18 @@ class FloatingWidgetService : Service() {
             registerReceiver(captureCompleteReceiver, filter, RECEIVER_NOT_EXPORTED)
         }
 
-        // Start as foreground service IMMEDIATELY
+        // Start as foreground service
         createNotificationChannel()
         startForegroundService()
 
         // Set up the UI
         setupUI()
 
-        // Initialize clipboard helper AFTER UI is ready
+        // Initialize clipboard helper
         initializeClipboardHelper()
+
+        // Start smart clipboard detection
+        startSmartClipboardDetection()
 
         Log.d(TAG, "Service onCreate completed")
     }
@@ -104,6 +120,7 @@ class FloatingWidgetService : Service() {
         overlayView = LayoutInflater.from(this).inflate(R.layout.layout_floating_widget, null)
         mainWidget = overlayView.findViewById(R.id.main_widget)
         expandedButtons = overlayView.findViewById(R.id.expanded_buttons)
+        refreshButton = overlayView.findViewById(R.id.btn_refresh_clipboard)
 
         setupLayoutParams()
         setupTouchListener()
@@ -116,144 +133,182 @@ class FloatingWidgetService : Service() {
         Log.d(TAG, "UI setup completed")
     }
 
-    private fun initializeClipboardHelper() {
-        Log.d(TAG, "=== INITIALIZING CLIPBOARD HELPER IN SERVICE ===")
-
-        mainHandler.post {
-            try {
-                if (!AccessibilityUtils.isAccessibilityServiceEnabled(this)) {
-                    Toast.makeText(
-                        this,
-                        "Please enable Clipboard Accessibility service in Settings → Accessibility.",
-                        Toast.LENGTH_LONG
-                    ).show()
-                    startActivity(
-                        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                    // Don't continue initialization
-                } else {
-                    // Only initialize if accessibility service is enabled
-                    clipboardHelper.initialize(applicationContext)
-
-                    clipboardHelper.setOnHistoryChangedCallback {
-                        Log.d(
-                            TAG,
-                            "📋 Clipboard history changed! New size: ${clipboardHelper.getHistory().size}"
-                        )
-                    }
-
-                    Log.d(TAG, "✅ Clipboard helper initialized in service")
-
-                    mainHandler.postDelayed({
-                        checkClipboardStatus()
-                    }, 2000)
-                }
-
-            } catch (e: Exception) {
-                Log.e(TAG, "❌ Error initializing clipboard helper: ${e.message}", e)
-            }
-        }
-    }
-
-
-    private fun checkClipboardStatus() {
-        Log.d(TAG, "=== CHECKING CLIPBOARD STATUS ===")
-
-        try {
-            val isInitialized = clipboardHelper.isInitialized()
-            val historySize = clipboardHelper.getHistory().size
-
-            Log.d(TAG, "Clipboard initialized: $isInitialized")
-            Log.d(TAG, "History size: $historySize")
-
-            // Debug state
-            clipboardHelper.debugState()
-
-            // If no history, add test data for demonstration
-//            if (historySize == 0) {
-//                Log.d(TAG, "No clipboard history, adding test data...")
-//                clipboardHelper.addTestData()
-//
-//                // Check again after test data
-//                mainHandler.postDelayed({
-//                    val newSize = clipboardHelper.getHistory().size
-//                    Log.d(TAG, "After test data, history size: $newSize")
-//
-//                    if (newSize > 0) {
-//                        Log.d(TAG, "✅ Test data added successfully")
-//                    } else {
-//                        Log.e(TAG, "❌ Failed to add test data")
-//                    }
-//                }, 1000)
-//            }
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Error checking clipboard status: ${e.message}")
-        }
-    }
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                "ss_channel",
-                "Screenshot Overlay",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager?.createNotificationChannel(channel)
-        }
-    }
-
-    private fun startForegroundService() {
-        val notification = NotificationCompat.Builder(this, "ss_channel")
-            .setContentTitle("Screenshot Service")
-            .setContentText("Floating overlay running")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .build()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                1,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            )
-        } else {
-            startForeground(1, notification)
-        }
-        Log.d(TAG, "Started as foreground service")
-    }
-
     private fun setupLayoutParams() {
         params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-//                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-
             else WindowManager.LayoutParams.TYPE_PHONE,
-//            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-
-//                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-//                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
-
-            // this set have the back button blocked but keyboard working with the copy working fine
-//            WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM or
-//                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-//                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
-//                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-
-            // this set have the back button + keyboard blocked  .. the copy working fine
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                    or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
-                    or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            // Start with non-focusable for best UX
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         )
 
         params.gravity = Gravity.TOP or Gravity.START
         params.x = 100
         params.y = 100
+    }
+
+
+
+    private fun toggleFocusMode(enableFocus: Boolean, duration: Long = focusToggleDuration) {
+        Log.d(TAG, "🎯 Toggling focus mode: enableFocus=$enableFocus, duration=$duration")
+
+        try {
+            // Common flags
+            val baseFlags = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
+
+            params.flags = if (enableFocus) {
+                baseFlags or WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
+            } else {
+                baseFlags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            }
+
+            windowManager.updateViewLayout(overlayView, params)
+            isInFocusableMode = enableFocus
+
+            updateRefreshButtonState(enableFocus)
+
+            Log.d(TAG, "✅ Switched to ${if (enableFocus) "FOCUSABLE" else "NON-FOCUSABLE"} mode")
+
+            // Schedule toggle back if needed
+            focusToggleHandler?.removeCallbacksAndMessages(null)
+            if (enableFocus) {
+                focusToggleHandler = Handler(Looper.getMainLooper())
+                focusToggleHandler?.postDelayed({
+                    toggleFocusMode(false, 0)
+                }, duration)
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error toggling focus mode: ${e.message}", e)
+        }
+    }
+
+    private fun updateRefreshButtonState(isRefreshing: Boolean) {
+        mainHandler.post {
+            if (isRefreshing) {
+                refreshButton.alpha = 1.0f
+                refreshButton.setBackgroundResource(R.drawable.ic_refresh_active) // You'll need this drawable
+            } else {
+                refreshButton.alpha = 0.7f
+                refreshButton.setBackgroundResource(R.drawable.ic_refresh) // You'll need this drawable
+            }
+        }
+    }
+
+    private fun performManualClipboardRefresh() {
+        Log.d(TAG, "🔄 Manual clipboard refresh triggered")
+
+        if (isInFocusableMode) {
+            Log.d(TAG, "Already in focusable mode, just refreshing clipboard")
+            refreshClipboardData()
+            return
+        }
+
+        // Toggle to focusable mode temporarily
+        toggleFocusMode(true, 2500L) // Give extra time for manual refresh
+
+        // Wait a bit for focus change to take effect, then refresh
+        mainHandler.postDelayed({
+            refreshClipboardData()
+        }, 200)
+
+        Toast.makeText(this, "🔄 Refreshing clipboard...", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun performSmartClipboardRefresh() {
+        Log.d(TAG, "🧠 Smart clipboard refresh triggered")
+
+        val currentTime = System.currentTimeMillis()
+
+        // Avoid too frequent smart refreshes
+        if (currentTime - lastClipboardCheck < 1000) {
+            Log.d(TAG, "Smart refresh too soon, skipping")
+            return
+        }
+
+        lastClipboardCheck = currentTime
+
+        if (!isInFocusableMode) {
+            // Quick toggle for smart refresh
+            toggleFocusMode(true, 1500L)
+
+            mainHandler.postDelayed({
+                refreshClipboardData()
+            }, 100)
+        } else {
+            // Already focusable, just refresh
+            refreshClipboardData()
+        }
+    }
+
+    private fun refreshClipboardData() {
+        Log.d(TAG, "📋 Refreshing clipboard data...")
+
+        try {
+            if (!clipboardHelper.isInitialized()) {
+                Log.w(TAG, "ClipboardHelper not initialized, initializing now")
+                clipboardHelper.initialize(applicationContext)
+                return
+            }
+
+            // Force check current clipboard content
+            clipboardHelper.forceCheckClipboard()
+
+//            // Trigger heartbeat activity for additional access
+//            val heartbeat = Intent(this, ClipboardHeartbeatActivity::class.java)
+//            heartbeat.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+//            heartbeat.putExtra("action", "clipboard_refresh")
+//            startActivity(heartbeat)
+
+            val historySize = clipboardHelper.getHistory().size
+            Log.d(TAG, "✅ Clipboard refreshed. History size: $historySize")
+
+            if (historySize > 0) {
+                Toast.makeText(this, "📋 Found ${historySize} clipboard items", Toast.LENGTH_SHORT).show()
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error refreshing clipboard: ${e.message}", e)
+        }
+    }
+
+    private fun startSmartClipboardDetection() {
+        Log.d(TAG, "🧠 Starting smart clipboard detection")
+
+        smartDetectionHandler = Handler(Looper.getMainLooper())
+
+        val smartDetectionRunnable = object : Runnable {
+            override fun run() {
+                if (isSmartDetectionEnabled && !isInFocusableMode) {
+                    // Only do smart detection when we're in non-focusable mode
+                    detectClipboardActivity()
+                }
+
+                // Schedule next check
+                smartDetectionHandler?.postDelayed(this, smartCheckInterval)
+            }
+        }
+
+        // Start the detection loop
+        smartDetectionHandler?.postDelayed(smartDetectionRunnable, smartCheckInterval)
+    }
+
+    private fun detectClipboardActivity() {
+        // This is where we can add heuristics to detect when clipboard might have changed
+        // For now, we'll use a simple time-based approach, but you can enhance this
+
+        val currentTime = System.currentTimeMillis()
+
+        // If it's been a while since last check and user might be active, do a smart refresh
+        if (currentTime - lastClipboardCheck > 10000) { // 10 seconds
+            Log.d(TAG, "🔍 Smart detection: Performing periodic clipboard check")
+            performSmartClipboardRefresh()
+        }
     }
 
     private fun setupTouchListener() {
@@ -328,16 +383,27 @@ class FloatingWidgetService : Service() {
     }
 
     private fun setupButtonClickListeners() {
+        // Clipboard refresh button (NEW)
+        refreshButton.setOnClickListener {
+            Log.d(TAG, "🔄 Refresh button clicked")
+            performManualClipboardRefresh()
+        }
+
+        // Long press on refresh button to toggle smart detection
+        refreshButton.setOnLongClickListener {
+            isSmartDetectionEnabled = !isSmartDetectionEnabled
+            val status = if (isSmartDetectionEnabled) "enabled" else "disabled"
+            Toast.makeText(this, "Smart clipboard detection $status", Toast.LENGTH_SHORT).show()
+            Log.d(TAG, "🧠 Smart detection toggled: $isSmartDetectionEnabled")
+            true
+        }
+
         // Screenshot region button
         overlayView.findViewById<Button>(R.id.btn_screenshot_region).setOnClickListener {
             if (ScreenshotHelper.isMediaProjectionReady()) {
                 startRegionCapture()
             } else {
-                Toast.makeText(
-                    this,
-                    "Media projection not ready. Please restart app.",
-                    Toast.LENGTH_LONG
-                ).show()
+                Toast.makeText(this, "Media projection not ready. Please restart app.", Toast.LENGTH_LONG).show()
             }
         }
 
@@ -345,19 +411,30 @@ class FloatingWidgetService : Service() {
         overlayView.findViewById<Button>(R.id.btn_ocr).setOnClickListener {
             if (ScreenshotHelper.isMediaProjectionReady()) {
                 startOCRCapture()
+                Log.d(TAG, "After OCR complete Triggering Manual Clipboard Refresh >>")
+                performManualClipboardRefresh()
             } else {
-                Toast.makeText(
-                    this,
-                    "Media projection not ready. Please restart app.",
-                    Toast.LENGTH_LONG
-                ).show()
+                Toast.makeText(this, "Media projection not ready. Please restart app.", Toast.LENGTH_LONG).show()
             }
         }
 
         // Clipboard History button
         overlayView.findViewById<Button>(R.id.btn_clipboard_history).setOnClickListener {
             Log.d(TAG, "📋 Clipboard History button clicked")
-            openClipboardHistory()
+
+            // Force refresh before opening history
+            if (!isInFocusableMode) {
+                performSmartClipboardRefresh()
+                // Delay opening history to allow refresh
+                mainHandler.postDelayed({
+                    openClipboardHistory()
+                }, 500)
+            } else {
+                refreshClipboardData()
+                mainHandler.postDelayed({
+                    openClipboardHistory()
+                }, 200)
+            }
         }
 
         // Close button
@@ -375,45 +452,27 @@ class FloatingWidgetService : Service() {
     private fun openClipboardHistory() {
         Log.d(TAG, "=== OPENING CLIPBOARD HISTORY ===")
 
-        // Force check clipboard status
-        clipboardHelper.forceCheckClipboard()
-
-        // Get current history
         val history = clipboardHelper.getHistory()
         Log.d(TAG, "Current clipboard history size: ${history.size}")
 
         if (!clipboardHelper.isInitialized()) {
             Log.w(TAG, "❌ ClipboardHelper not initialized")
-            Toast.makeText(
-                this,
-                "Clipboard service not ready. Please try again.",
-                Toast.LENGTH_SHORT
-            ).show()
+            Toast.makeText(this, "Clipboard service not ready. Please try refresh button.", Toast.LENGTH_SHORT).show()
             return
         }
 
-        // Log current history
         if (history.isEmpty()) {
             Log.d(TAG, "❌ Clipboard history is empty")
-
-//            // Add test data and try again
-//            clipboardHelper.addTestData()
-//            Toast.makeText(this, "Adding sample data. Try again in a moment.", Toast.LENGTH_SHORT)
-//                .show()
-
+            Toast.makeText(this, "No clipboard history. Try copying some text first, then use refresh button.", Toast.LENGTH_LONG).show()
             return
-        } else {
-            Log.d(TAG, "✅ Found ${history.size} clipboard items:")
-            history.forEachIndexed { index, item ->
-                Log.d(TAG, "  [$index] '${item.getPreviewText()}' - ${item.getFormattedTime()}")
-            }
         }
+
+        Log.d(TAG, "✅ Found ${history.size} clipboard items")
 
         // Check accessibility service
         val isAccessibilityEnabled = AccessibilityUtils.isAccessibilityServiceEnabled(this)
         if (!isAccessibilityEnabled) {
-            Toast.makeText(this, "Enable Accessibility Service for auto-paste", Toast.LENGTH_LONG)
-                .show()
+            Toast.makeText(this, "Enable Accessibility Service for auto-paste", Toast.LENGTH_LONG).show()
         }
 
         // Start clipboard overlay
@@ -425,17 +484,57 @@ class FloatingWidgetService : Service() {
             // Hide this widget temporarily
             overlayView.visibility = View.INVISIBLE
 
-            // Fallback to show widget again after 15 seconds
+            // Show widget again after timeout
             mainHandler.postDelayed({
                 if (overlayView.visibility == View.INVISIBLE) {
                     Log.d(TAG, "Fallback: Showing widget again after timeout")
                     showWidget()
                 }
-            }, 211)
+            }, 1500)
 
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to start ClipboardOverlayService: ${e.message}", e)
             Toast.makeText(this, "Failed to open clipboard history", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun initializeClipboardHelper() {
+        Log.d(TAG, "=== INITIALIZING CLIPBOARD HELPER IN SERVICE ===")
+
+        mainHandler.post {
+            try {
+                if (!AccessibilityUtils.isAccessibilityServiceEnabled(this)) {
+                    Toast.makeText(this, "Please enable Clipboard Accessibility service in Settings → Accessibility.", Toast.LENGTH_LONG).show()
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                } else {
+                    clipboardHelper.initialize(applicationContext)
+
+                    clipboardHelper.setOnHistoryChangedCallback {
+                        Log.d(TAG, "📋 Clipboard history changed! New size: ${clipboardHelper.getHistory().size}")
+                    }
+
+                    Log.d(TAG, "✅ Clipboard helper initialized in service")
+
+                    mainHandler.postDelayed({
+                        checkClipboardStatus()
+                    }, 2000)
+                }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Error initializing clipboard helper: ${e.message}", e)
+            }
+        }
+    }
+
+    private fun checkClipboardStatus() {
+        Log.d(TAG, "=== CHECKING CLIPBOARD STATUS ===")
+        try {
+            val isInitialized = clipboardHelper.isInitialized()
+            val historySize = clipboardHelper.getHistory().size
+            Log.d(TAG, "Clipboard initialized: $isInitialized, History size: $historySize")
+            clipboardHelper.debugState()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking clipboard status: ${e.message}")
         }
     }
 
@@ -473,9 +572,36 @@ class FloatingWidgetService : Service() {
         Log.d(TAG, "Widget shown")
     }
 
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel("ss_channel", "Screenshot Overlay", NotificationManager.IMPORTANCE_LOW)
+            val manager = getSystemService(NotificationManager::class.java)
+            manager?.createNotificationChannel(channel)
+        }
+    }
+
+    private fun startForegroundService() {
+        val notification = NotificationCompat.Builder(this, "ss_channel")
+            .setContentTitle("Screenshot Service")
+            .setContentText("Floating overlay running")
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .build()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        } else {
+            startForeground(1, notification)
+        }
+        Log.d(TAG, "Started as foreground service")
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "=== SERVICE DESTROY ===")
+
+        // Stop smart detection
+        smartDetectionHandler?.removeCallbacksAndMessages(null)
+        focusToggleHandler?.removeCallbacksAndMessages(null)
 
         try {
             unregisterReceiver(captureCompleteReceiver)
@@ -483,12 +609,12 @@ class FloatingWidgetService : Service() {
             Log.e(TAG, "Error unregistering receiver: ${e.message}")
         }
 
-        // Cleanup clipboard helper
         clipboardHelper.cleanup()
 
         if (::windowManager.isInitialized && ::overlayView.isInitialized) {
             windowManager.removeView(overlayView)
         }
+
         sendBroadcast(Intent("action.STOP_HEARTBEAT"))
         Log.d(TAG, "Service destroyed")
     }
@@ -502,25 +628,15 @@ class FloatingWidgetService : Service() {
                 val data = intent.getParcelableExtra<Intent>("dataIntent")!!
 
                 mainHandler.postDelayed({
-                    ScreenshotHelper.setMediaProjection(
-                        context = this,
-                        resultCode = rc,
-                        data = data
-                    )
-
+                    ScreenshotHelper.setMediaProjection(context = this, resultCode = rc, data = data)
                     if (!ScreenshotHelper.isMediaProjectionReady()) {
                         Log.e(TAG, "MediaProjection failed to initialize")
-                        Toast.makeText(
-                            this,
-                            "Failed to initialize screen capture",
-                            Toast.LENGTH_LONG
-                        ).show()
+                        Toast.makeText(this, "Failed to initialize screen capture", Toast.LENGTH_LONG).show()
                     } else {
                         Log.d(TAG, "MediaProjection initialized successfully")
                     }
                 }, 1000)
             }
-
             else -> {
                 if (intent?.getStringExtra("action") == "show_widget") {
                     showWidget()
@@ -531,7 +647,5 @@ class FloatingWidgetService : Service() {
         return START_STICKY
     }
 
-    override fun onBind(intent: Intent?): IBinder? {
-        return null
-    }
+    override fun onBind(intent: Intent?): IBinder? = null
 }

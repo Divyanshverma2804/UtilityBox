@@ -2,7 +2,11 @@ package com.example.utilitybox
 
 import android.app.Activity
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.view.Gravity
+import android.view.WindowManager
 
 class ClipboardHeartbeatActivity : Activity() {
     companion object {
@@ -11,13 +15,9 @@ class ClipboardHeartbeatActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Make window 1×1 pixel so it’s effectively invisible
         window.setLayout(1, 1)
-        Log.d(TAG, "HeartbeatActivity started to hold focus for clipboard")
-
-        // Immediately move this task to the BACK of the stack,
-        // but still keep it “focused” for the system
-//        moveTaskToBack(false)
+        ClipboardHelper.getInstance().forceCheckClipboard()
+        Handler(Looper.getMainLooper()).postDelayed({ finish() }, 500)
     }
 
     override fun onDestroy() {

@@ -102,6 +102,7 @@
         </service>
 
 
+
         <!-- File Provider for sharing screenshots -->
         <provider
             android:name="androidx.core.content.FileProvider"
