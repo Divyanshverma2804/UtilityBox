@@ -1,4 +1,4 @@
-// MainActivity.kt - Cleaned up without clipboard helper and accessibility service
+// MainActivity.kt - Updated with proper Clipboard Helper initialization and debugging
 package com.example.utilitybox
 
 import android.app.Activity
@@ -9,9 +9,12 @@ import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.widget.Button
+import android.widget.Switch
 import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
@@ -25,30 +28,33 @@ class MainActivity : AppCompatActivity() {
 
     private var isWidgetServiceRunning = false
     private lateinit var startButton: Button
+    private lateinit var debugToggleSwitch: Switch
+    private val PREF_DEBUG_IMAGES = "debug_images_enabled"
+    // Clipboard helper instance
+    private val clipboardHelper = ClipboardHelper.getInstance()
 
     private val TAG = "MainActivity"
 
-    // BroadcastReceiver to listen for widget service state changes
-    private val widgetStateReceiver = object : BroadcastReceiver() {
+    private val floatingWidgetReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             Log.d(TAG, "Broadcast received: ${intent?.action}")
             when (intent?.action) {
                 "SHOW_FLOATING_WIDGET" -> {
-                    // Notify service to show widget again
                     val serviceIntent = Intent(this@MainActivity, FloatingWidgetService::class.java)
                     serviceIntent.putExtra("action", "show_widget")
                     startService(serviceIntent)
                     Log.d(TAG, "Sent show_widget command to service")
                 }
                 "WIDGET_SERVICE_STOPPED" -> {
-                    // Widget service has been stopped (e.g., by drag and drop delete)
-                    Log.d(TAG, "Widget service stopped - updating UI")
+                    Log.d(TAG, "🛑 FloatingWidgetService stopped, updating UI")
                     isWidgetServiceRunning = false
                     updateButtonState()
+                    Toast.makeText(this@MainActivity, "Widget service stopped", Toast.LENGTH_SHORT).show()
                 }
             }
         }
     }
+
 
     @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -58,18 +64,43 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         startButton = findViewById(R.id.btn_start_widget)
+        debugToggleSwitch = findViewById(R.id.switch_debug_images)
 
-        // Register broadcast receiver for widget state changes
+        // Initialize clipboard helper with proper timing and debugging
+        Log.d(TAG, "Initializing clipboard helper in MainActivity")
+        initializeClipboardHelper()
+
+        // Initialize debug toggle
+        val sharedPref = getSharedPreferences("UtilityBoxSettings", Context.MODE_PRIVATE)
+        val debugEnabled = sharedPref.getBoolean(PREF_DEBUG_IMAGES, false)
+        debugToggleSwitch.isChecked = debugEnabled
+        ScreenshotHelper.setSaveDebugImages(debugEnabled)
+
+        // Set debug toggle listener
+        debugToggleSwitch.setOnCheckedChangeListener { _, isChecked ->
+            ScreenshotHelper.setSaveDebugImages(isChecked)
+
+            // Save preference
+            with(sharedPref.edit()) {
+                putBoolean(PREF_DEBUG_IMAGES, isChecked)
+                apply()
+            }
+
+            val message = if (isChecked) "OCR debug images will be saved" else "OCR debug images disabled"
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+        }
+
+        // Register broadcast receiver
         val filter = IntentFilter().apply {
             addAction("SHOW_FLOATING_WIDGET")
-            addAction("WIDGET_SERVICE_STOPPED")
+            addAction("WIDGET_SERVICE_STOPPED")   // listen for service stop
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(floatingWidgetReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(floatingWidgetReceiver, filter, RECEIVER_NOT_EXPORTED)
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(widgetStateReceiver, filter, RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(widgetStateReceiver, filter)
-        }
         Log.d(TAG, "Broadcast receiver registered")
 
         startButton.setOnClickListener {
@@ -81,9 +112,63 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // Check if accessibility service is enabled
+        checkAccessibilityService()
+
         updateButtonState()
 
         Log.d(TAG, "MainActivity onCreate completed")
+    }
+
+    private fun initializeClipboardHelper() {
+        Log.d(TAG, "initializeClipboardHelper() called")
+
+        try {
+            // Initialize the clipboard helper
+            clipboardHelper.initialize(this)
+
+            // Give it some time to initialize and then check status
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (clipboardHelper.isInitialized()) {
+                    Log.d(TAG, "ClipboardHelper initialized successfully in MainActivity")
+
+                    // Add some test data to verify it's working
+                    val historySize = clipboardHelper.getHistory().size
+                    Log.d(TAG, "Initial clipboard history size: $historySize")
+
+                    if (historySize == 0) {
+                        Log.d(TAG, "Adding test data from MainActivity")
+                        clipboardHelper.addTestData()
+
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            val newSize = clipboardHelper.getHistory().size
+                            Log.d(TAG, "Clipboard history size after test data: $newSize")
+                        }, 1000)
+                    }
+
+                } else {
+                    Log.e(TAG, "ClipboardHelper failed to initialize in MainActivity")
+                    Toast.makeText(this, "Clipboard initialization failed", Toast.LENGTH_SHORT).show()
+                }
+            }, 2000) // Wait 2 seconds for initialization
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error initializing clipboard helper in MainActivity", e)
+        }
+    }
+
+    private fun checkAccessibilityService() {
+        Log.d(TAG, "Checking accessibility service status")
+        if (!AccessibilityUtils.isAccessibilityServiceEnabled(this)) {
+            Log.d(TAG, "Accessibility service not enabled")
+            // Show dialog to enable accessibility service
+            AccessibilityUtils.showAccessibilityDialog(this) {
+                // User opened settings
+                Log.d(TAG, "User opened accessibility settings")
+            }
+        } else {
+            Log.d(TAG, "Accessibility service is enabled")
+        }
     }
 
     private fun checkPermissionsAndStart() {
@@ -104,6 +189,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun startWidgetService() {
         Log.d(TAG, "startWidgetService() called")
+
+        // Double-check clipboard helper before starting service
+        if (!clipboardHelper.isInitialized()) {
+            Log.w(TAG, "ClipboardHelper not initialized before starting service, initializing now...")
+            clipboardHelper.initialize(this)
+        }
 
         val serviceIntent = Intent(this, FloatingWidgetService::class.java)
         startService(serviceIntent)
@@ -183,15 +274,16 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         Log.d(TAG, "onResume called")
 
-        // Check if the service is actually running by trying to ping it
-        // This is a simple way to verify service state when app resumes
-        checkServiceStatus()
-    }
+        // Check if service is still running and update UI accordingly
+        // You could implement a more robust service status check here if needed
 
-    private fun checkServiceStatus() {
-        // We can implement a simple service health check here if needed
-        // For now, we rely on the broadcast receiver to keep state in sync
-        Log.d(TAG, "Service status - isWidgetServiceRunning: $isWidgetServiceRunning")
+        // Also re-check clipboard helper status
+        if (clipboardHelper.isInitialized()) {
+            val historySize = clipboardHelper.getHistory().size
+            Log.d(TAG, "onResume - clipboard history size: $historySize")
+        } else {
+            Log.w(TAG, "onResume - clipboard helper not initialized")
+        }
     }
 
     override fun onPause() {
@@ -204,10 +296,18 @@ class MainActivity : AppCompatActivity() {
         Log.d(TAG, "onDestroy called")
 
         try {
-            unregisterReceiver(widgetStateReceiver)
+            unregisterReceiver(floatingWidgetReceiver)
             Log.d(TAG, "Broadcast receiver unregistered")
         } catch (e: Exception) {
             Log.e(TAG, "Error unregistering receiver: ${e.message}")
+        }
+
+        // Cleanup clipboard helper
+        try {
+            clipboardHelper.cleanup()
+            Log.d(TAG, "ClipboardHelper cleanup completed")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error cleaning up clipboard helper", e)
         }
     }
 }

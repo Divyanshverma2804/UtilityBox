@@ -1,8 +1,15 @@
 <resources>
     <string name="app_name">UtilityBox</string>
-<!--    <string name="accessibility_service_description">Allows the app to automatically paste clipboard content into text fields when you select an item from clipboard history.</string>-->
-    <string name="accessibility_service_description">
-  Clipboard monitor for UtilityBox
-    </string>
 
+    <string name="accessibility_service_paste_description">
+    UtilityBox Auto-Paste - Enables automatic text pasting functionality for enhanced productivity
+</string>
+
+    <string name="accessibility_service_clipboard_description">
+    UtilityBox Clipboard Monitor - Monitors clipboard changes to maintain clipboard history
+</string>
+
+    <string name="accessibility_service_description">
+    UtilityBox Clipboard Manager - Provides clipboard history and auto-paste functionality for enhanced productivity
+</string>
 </resources>

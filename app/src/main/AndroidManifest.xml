@@ -1,40 +1,41 @@
+<!-- AndroidManifest.xml -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     package="com.example.utilitybox">
 
-    <!-- Required Permissions -->
+    <!-- Permissions -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-
-    <!-- Required for media projection foreground service -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
-
-    <!-- One of these is also required -->
-    <uses-permission android:name="android.permission.CAPTURE_VIDEO_OUTPUT"
-        tools:ignore="ProtectedPermissions" />
-    <!-- OR -->
-    <uses-permission android:name="android.permission.PROJECT_MEDIA" />
-<!--    <uses-permission android:name="android.permission.INTERNET" />-->
-
-    <!-- For older Android versions -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.READ_CLIPBOARD" />
+    <uses-permission android:name="android.permission.WRITE_CLIPBOARD" />
+    <uses-permission android:name="android.permission.READ_CLIPBOARD_IN_BACKGROUND"
+        tools:ignore="ProtectedPermissions"/>
+
+
+
+    <!-- Features -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
 
     <application
         android:allowBackup="true"
-        android:label="UtilityBox Carlos"
-        android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="UtilityBox"
+        android:icon="@mipmap/rock_clip"
+        android:roundIcon="@mipmap/rock_clip_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.AppCompat.Light.DarkActionBar"
+        android:theme="@style/Theme.AppCompat.Light.NoActionBar"
         android:requestLegacyExternalStorage="true"
         tools:targetApi="31">
 
-        <!-- Launcher Activity -->
+        <!-- Main Activity -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -45,20 +46,64 @@
             </intent-filter>
         </activity>
 
-        <!-- MediaProjection Foreground Service -->
+
+        <activity
+            android:name=".ClipboardHeartbeatActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:taskAffinity="">
+        </activity>
+
+
+        <!-- FloatingWidgetService with media projection foreground service type -->
         <service
             android:name=".FloatingWidgetService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
-        <!-- Drawing Overlay -->
+        <!-- DrawingOverlayService -->
         <service
             android:name=".DrawingOverlayService"
             android:enabled="true"
             android:exported="false" />
 
-        <!-- File Provider (used for sharing screenshots) -->
+        <!-- Clipboard Overlay Service -->
+        <service
+            android:name=".ClipboardOverlayService"
+            android:enabled="true"
+            android:exported="false" />
+
+        <!-- Accessibility Service for auto-paste -->
+        <service
+            android:name=".AccessibilityHelper"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true"
+            android:label="UtilityBox Auto-Paste">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config_paste" />
+        </service>
+
+        <service
+            android:name=".ClipboardAccessibilityService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true"
+            android:label="UtilityBox Clipboard Monitor">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config_clipboard" />
+        </service>
+
+
+        <!-- File Provider for sharing screenshots -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

@@ -2,6 +2,7 @@
 package com.example.utilitybox
 
 import android.app.Activity
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -20,12 +21,14 @@ import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.util.Log
 import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
 import java.io.File
 import java.io.FileOutputStream
+import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -36,6 +39,18 @@ object ScreenshotHelper {
     private var data: Intent? = null
     private var isMediaProjectionReady = false
     private var isRecreating = false // Prevent infinite recreation
+
+    // Permission callback interface and instance
+    interface PermissionCallback {
+        fun onPermissionGranted()
+        fun onPermissionDenied()
+    }
+
+    private var permissionCallback: PermissionCallback? = null
+    private var permissionGrantTime: Long = 0
+    private val PERMISSION_VALIDITY_DURATION = 30 * 60 * 1000L // 30 minutes in milliseconds
+    private var saveDebugImages = false // Default to false
+
 
     fun requestMediaProjection(activity: Activity, requestCode: Int) {
         mediaProjectionManager = activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -52,8 +67,12 @@ object ScreenshotHelper {
         // Create persistent media projection
         createMediaProjection()
         isMediaProjectionReady = true
+        permissionGrantTime = System.currentTimeMillis() // Track when permission was granted
 
         Log.d("SCREENSHOT", "MediaProjection has been set and is persistent.")
+
+        // Notify callback if set
+        permissionCallback?.onPermissionGranted()
     }
 
     private fun createMediaProjection() {
@@ -84,6 +103,48 @@ object ScreenshotHelper {
     }
 
     fun isMediaProjectionReady(): Boolean = isMediaProjectionReady && mediaProjection != null
+
+    /**
+     * Set permission callback to handle permission events
+     */
+    fun setPermissionCallback(callback: PermissionCallback?) {
+        permissionCallback = callback
+        Log.d("SCREENSHOT", "Permission callback set: ${callback != null}")
+    }
+
+    /**
+     * Check if we need new permission (Android 15 requirement or expired permission)
+     * Returns true if:
+     * 1. No permission has been granted yet
+     * 2. Permission has expired (Android 15+ has time-limited permissions)
+     * 3. MediaProjection is null despite having permission data
+     */
+    fun needsNewPermission(): Boolean {
+        // No permission granted yet
+        if (!isMediaProjectionReady || data == null) {
+            Log.d("SCREENSHOT", "No permission granted yet")
+            return true
+        }
+
+        // Check if permission has expired (Android 15+ behavior)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) { // Android 15
+            val currentTime = System.currentTimeMillis()
+            val timeSinceGrant = currentTime - permissionGrantTime
+
+            if (timeSinceGrant > PERMISSION_VALIDITY_DURATION) {
+                Log.d("SCREENSHOT", "Permission expired after ${timeSinceGrant}ms")
+                return true
+            }
+        }
+
+        // Check if MediaProjection became null despite having permission
+        if (mediaProjection == null) {
+            Log.d("SCREENSHOT", "MediaProjection is null, need new permission")
+            return true
+        }
+
+        return false
+    }
 
     fun captureScreenshot(context: Context, callback: (String) -> Unit) {
         val metrics = context.resources.displayMetrics
@@ -160,7 +221,7 @@ object ScreenshotHelper {
                             right - left, bottom - top
                         )
 
-                        val path = saveScreenshot(context, croppedBitmap, "screenshot")
+                        val path = saveScreenshot(context, croppedBitmap, "Region-Capture","utility_screenshot")
                         Log.d("SCREENSHOT", "Screenshot saved at: $path")
 
                         Handler(Looper.getMainLooper()).post {
@@ -213,16 +274,6 @@ object ScreenshotHelper {
         Log.d("OCR_DEBUG", "Selection rect: $rect")
 
         val reader = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2)
-
-//        -------
-        // Before calling createVirtualDisplay, register a callback
-        mediaProjection?.registerCallback(object : MediaProjection.Callback() {
-            override fun onStop() {
-                // Handle when media projection stops
-                Log.d("MediaProjection", "Media projection stopped")
-            }
-        }, null)
-//        -------
 
         // Create a fresh virtual display for OCR
         val vd = mediaProjection!!.createVirtualDisplay(
@@ -298,8 +349,13 @@ object ScreenshotHelper {
                     )
 
                     // Save debug image
-                    val debugPath = saveScreenshot(context, croppedBitmap, "ocr_debug")
-                    Log.d("OCR_DEBUG", "OCR debug image saved at: $debugPath")
+                    // Save debug image only if enabled
+                    if (saveDebugImages) {
+                        val debugPath = saveScreenshot(context, croppedBitmap, "OCR-Capture","ocr_debug")
+                        Log.d("OCR_DEBUG", "OCR debug image saved at: $debugPath")
+                    } else {
+                        Log.d("OCR_DEBUG", "Debug image saving disabled")
+                    }
 
                     // Extract text
                     val extractedText = OCRHelper.extractTextFromBitmap(croppedBitmap)
@@ -390,6 +446,10 @@ object ScreenshotHelper {
         }
     }
 
+    fun setSaveDebugImages(save: Boolean) {
+        saveDebugImages = save
+        Log.d("SCREENSHOT", "Debug image saving set to: $save")
+    }
     private fun ensureMediaProjection(): Boolean {
         if (mediaProjection == null && isMediaProjectionReady && !isRecreating) {
             Log.d("SCREENSHOT", "Recreating MediaProjection...")
@@ -398,26 +458,99 @@ object ScreenshotHelper {
         return mediaProjection != null
     }
 
-    private fun saveScreenshot(context: Context, bitmap: Bitmap, prefix: String): String {
+    private fun saveScreenshot(context: Context, bitmap: Bitmap, subfolder: String, prefix: String): String {
         val now = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        val filename = "${prefix}_$now.png"
 
-        val picturesDir = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "Screenshots")
-        if (!picturesDir.exists()) {
-            picturesDir.mkdirs()
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            saveToMediaStore(context, bitmap, filename, subfolder)
+        } else {
+            saveToPublicDirectory(context, bitmap, filename, subfolder)
+        }
+    }
+
+    // For Android 10+ (API 29+)
+    private fun saveToMediaStore(context: Context, bitmap: Bitmap, filename: String, subfolder: String): String {
+        val contentValues = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, filename)
+            put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+            put(MediaStore.Images.Media.WIDTH, bitmap.width)
+            put(MediaStore.Images.Media.HEIGHT, bitmap.height)
+
+            // 👇 Dynamic folder inside UtilityBox
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/UtilityBox/$subfolder")
+            }
         }
 
-        val file = File(picturesDir, "${prefix}_$now.png")
-        val fos = FileOutputStream(file)
-        bitmap.compress(Bitmap.CompressFormat.PNG, 100, fos)
-        fos.flush()
-        fos.close()
+        val contentResolver = context.contentResolver
+        val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
 
+        return try {
+            uri?.let { imageUri ->
+                contentResolver.openOutputStream(imageUri)?.use { stream ->
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+                }
+                imageUri.toString()
+            } ?: throw Exception("Failed to create MediaStore entry")
+        } catch (e: Exception) {
+            Log.e("SCREENSHOT", "Failed to save via MediaStore: ${e.message}")
+            saveToAppDirectory(context, bitmap, filename, subfolder)
+        }
+    }
+
+    private fun saveToPublicDirectory(context: Context, bitmap: Bitmap, filename: String, subfolder: String): String {
+        val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+        val targetDir = File(picturesDir, "UtilityBox/$subfolder")
+
+        if (!targetDir.exists()) targetDir.mkdirs()
+
+        val file = File(targetDir, filename)
+        FileOutputStream(file).use { fos ->
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, fos)
+        }
+        notifyMediaScanner(context, file.absolutePath)
         return file.absolutePath
+    }
+
+    private fun saveToAppDirectory(context: Context, bitmap: Bitmap, filename: String, subfolder: String): String {
+        val picturesDir = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "UtilityBox/$subfolder")
+        if (!picturesDir.exists()) picturesDir.mkdirs()
+
+        val file = File(picturesDir, filename)
+        FileOutputStream(file).use { fos ->
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, fos)
+        }
+        return file.absolutePath
+    }
+
+    // Notify media scanner for Android 9 and below
+    private fun notifyMediaScanner(context: Context, filePath: String) {
+        try {
+            val scannerIntent = android.content.Intent(android.content.Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
+            scannerIntent.data = android.net.Uri.fromFile(File(filePath))
+            context.sendBroadcast(scannerIntent)
+        } catch (e: Exception) {
+            Log.e("SCREENSHOT", "Failed to notify media scanner: ${e.message}")
+        }
+    }
+
+    // Alternative method using MediaScannerConnection (more reliable)
+    private fun scanFile(context: Context, filePath: String) {
+        android.media.MediaScannerConnection.scanFile(
+            context,
+            arrayOf(filePath),
+            arrayOf("image/png")
+        ) { path, uri ->
+            Log.d("SCREENSHOT", "Media scanner finished scanning $path. URI: $uri")
+        }
     }
 
     fun cleanup() {
         isMediaProjectionReady = false
         isRecreating = false
+        permissionGrantTime = 0
+        permissionCallback = null
         mediaProjection?.stop()
         mediaProjection = null
         Log.d("SCREENSHOT", "ScreenshotHelper cleanup completed")

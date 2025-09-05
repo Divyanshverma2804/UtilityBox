@@ -64,7 +64,7 @@ object OCRHelper {
             ).show()
 
             // Optional: You can also save to a text file
-            saveTextToFile(context, text)
+//            saveTextToFile(context, text)
         } else {
             Toast.makeText(context, "No text found in the selected region", Toast.LENGTH_SHORT).show()
         }

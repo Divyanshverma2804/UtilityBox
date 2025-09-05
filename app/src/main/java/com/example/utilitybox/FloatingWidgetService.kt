@@ -1,4 +1,4 @@
-// FloatingWidgetService.kt - Enhanced with broadcast on service stop
+// FloatingWidgetService.kt - Enhanced with clipboard features and drag-to-delete
 package com.example.utilitybox
 
 import android.app.NotificationChannel
@@ -13,9 +13,11 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import android.view.*
 import android.widget.Button
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
@@ -31,14 +33,16 @@ class FloatingWidgetService : Service() {
         private const val NOTIFICATION_CHANNEL_ID = "floating_widget_channel"
         private const val NOTIFICATION_ID = 1001
         private const val DOUBLE_TAP_TIMEOUT = 300L
-        private const val WIDGET_HIDE_TIMEOUT = 10000L // 10 seconds
+        private const val WIDGET_HIDE_TIMEOUT = 15000L // Increased for Android 15
         private const val DRAG_THRESHOLD = 10
         private const val CLICK_DURATION_THRESHOLD = 200L
         private const val DELETE_ZONE_SIZE = 550
         private const val DELETE_ZONE_MARGIN_BOTTOM = 100
         private const val DELETE_ZONE_ANIMATION_DURATION = 300L
         private const val DELETE_ZONE_HIDE_DELAY = 500L
-        private const val DELETE_DISTANCE_THRESHOLD = 1.5 // Division factor for delete zone width
+        private const val DELETE_DISTANCE_THRESHOLD = 1.5
+        private const val PERMISSION_RETRY_DELAY = 2000L
+        private const val MAX_PERMISSION_RETRIES = 3
     }
 
     // UI Components
@@ -46,6 +50,7 @@ class FloatingWidgetService : Service() {
     private lateinit var overlayView: View
     private lateinit var mainWidget: LinearLayout
     private lateinit var expandedButtons: LinearLayout
+    private lateinit var refreshButton: ImageButton
     private lateinit var params: WindowManager.LayoutParams
 
     // Delete Zone Components
@@ -64,16 +69,40 @@ class FloatingWidgetService : Service() {
     private var isDragging = false
     private var dragStartTime = 0L
 
+    // Permission state
+    private var isWaitingForPermission = false
+    private var permissionRetryCount = 0
+    private var pendingCaptureMode: String? = null
+
+    // Smart clipboard detection
+    private var lastClipboardCheck = 0L
+    private var isSmartDetectionEnabled = true
+    private val smartCheckInterval = 3000L // Check every 3 seconds when smart mode is on
+    private var smartDetectionHandler: Handler? = null
+
+    // Focus state management
+    private var isInFocusableMode = false
+    private var focusToggleHandler: Handler? = null
+    private val focusToggleDuration = 2000L // Keep focusable for 2 seconds
+
     // Handlers
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // BroadcastReceiver for capture completion events
-    private val captureCompleteReceiver = object : BroadcastReceiver() {
+    // Service state tracking
+    private var isServiceInitialized = false
+
+    // Clipboard helper instance
+    private val clipboardHelper = ClipboardHelper.getInstance()
+
+    // BroadcastReceiver for capture completion events, permission updates, and clipboard events
+    private val serviceReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
+            Log.d(TAG, "📡 Received broadcast: ${intent?.action}")
+
             when (intent?.action) {
                 "CAPTURE_COMPLETE" -> {
                     Log.d(TAG, "📸 Capture completed - showing widget")
-                    showWidget()
+                    handleCaptureComplete()
                 }
                 "SHOW_FLOATING_WIDGET" -> {
                     Log.d(TAG, "🔄 Widget show requested")
@@ -81,35 +110,54 @@ class FloatingWidgetService : Service() {
                 }
                 "OCR_COMPLETE" -> {
                     Log.d(TAG, "📝 OCR completed - showing widget")
-                    showWidget()
-                    val extractedText = intent.getStringExtra("extracted_text")
-                    if (!extractedText.isNullOrEmpty()) {
-                        Toast.makeText(context, "✅ Text extracted: ${extractedText.take(50)}...", Toast.LENGTH_SHORT).show()
-                    }
+                    handleOCRComplete(intent)
+                }
+                "MEDIA_PROJECTION_READY" -> {
+                    Log.d(TAG, "🎬 MediaProjection ready - handling pending operations")
+                    handleMediaProjectionReady()
+                }
+                "MEDIA_PROJECTION_EXPIRED" -> {
+                    Log.w(TAG, "⏰ MediaProjection expired")
+                    handleMediaProjectionExpired()
+                }
+                "PERMISSION_DENIED" -> {
+                    Log.w(TAG, "❌ Permission denied by user")
+                    handlePermissionDenied()
+                }
+                "CLIPBOARD_MIGHT_HAVE_CHANGED" -> {
+                    Log.d(TAG, "🔔 Received clipboard change hint - triggering smart refresh")
+                    performSmartClipboardRefresh()
                 }
             }
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "🚀 FloatingWidgetService starting...")
 
-        initializeService()
-
-        Log.i(TAG, "✅ FloatingWidgetService initialized successfully")
+        try {
+            initializeService()
+            setupPermissionCallback()
+            initializeClipboardHelper()
+            startSmartClipboardDetection()
+            isServiceInitialized = true
+            Log.i(TAG, "✅ FloatingWidgetService initialized successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to initialize FloatingWidgetService", e)
+            stopSelf()
+        }
     }
 
     private fun initializeService() {
         Log.d(TAG, "⚙️ Initializing service components...")
 
-        // Register broadcast receiver
-        registerBroadcastReceiver()
-
-        // Start as foreground service
+        // Start as foreground service first (required for Android 14+)
         createNotificationChannel()
         startForegroundService()
+
+        // Register broadcast receiver
+        registerBroadcastReceiver()
 
         // Set up the UI
         setupUI()
@@ -120,6 +168,33 @@ class FloatingWidgetService : Service() {
         Log.d(TAG, "✅ All service components initialized")
     }
 
+    private fun setupPermissionCallback() {
+        Log.d(TAG, "🔐 Setting up permission callback...")
+
+        ScreenshotHelper.setPermissionCallback(object : ScreenshotHelper.PermissionCallback {
+            override fun onPermissionGranted() {
+                Log.d(TAG, "✅ Permission callback: granted")
+                mainHandler.post {
+                    handleMediaProjectionReady()
+                }
+            }
+
+            override fun onPermissionDenied() {
+                Log.w(TAG, "❌ Permission callback: denied")
+                mainHandler.post {
+                    handlePermissionDenied()
+                }
+            }
+
+            fun onPermissionExpired() {
+                Log.w(TAG, "⏰ Permission callback: expired")
+                mainHandler.post {
+                    handleMediaProjectionExpired()
+                }
+            }
+        })
+    }
+
     private fun registerBroadcastReceiver() {
         Log.d(TAG, "📡 Registering broadcast receivers...")
 
@@ -127,17 +202,22 @@ class FloatingWidgetService : Service() {
             addAction("CAPTURE_COMPLETE")
             addAction("SHOW_FLOATING_WIDGET")
             addAction("OCR_COMPLETE")
+            addAction("MEDIA_PROJECTION_READY")
+            addAction("MEDIA_PROJECTION_EXPIRED")
+            addAction("PERMISSION_DENIED")
+            addAction("CLIPBOARD_MIGHT_HAVE_CHANGED")
         }
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(captureCompleteReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                registerReceiver(serviceReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
             } else {
-                registerReceiver(captureCompleteReceiver, filter)
+                registerReceiver(serviceReceiver, filter, RECEIVER_NOT_EXPORTED)
             }
             Log.d(TAG, "✅ Broadcast receivers registered successfully")
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to register broadcast receivers", e)
+            throw e
         }
     }
 
@@ -152,6 +232,7 @@ class FloatingWidgetService : Service() {
             overlayView = LayoutInflater.from(this).inflate(R.layout.layout_floating_widget, null)
             mainWidget = overlayView.findViewById(R.id.main_widget)
             expandedButtons = overlayView.findViewById(R.id.expanded_buttons)
+            refreshButton = overlayView.findViewById(R.id.btn_refresh_clipboard)
 
             setupLayoutParams()
             setupTouchListener()
@@ -176,6 +257,7 @@ class FloatingWidgetService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else WindowManager.LayoutParams.TYPE_PHONE,
+            // Start with non-focusable for best UX
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
@@ -248,8 +330,13 @@ class FloatingWidgetService : Service() {
 
                         params.x = (initialX + deltaX).toInt()
                         params.y = (initialY + deltaY).toInt()
-                        windowManager.updateViewLayout(overlayView, params)
-                        Log.v(TAG, "📍 Widget moved to (${params.x}, ${params.y})")
+
+                        try {
+                            windowManager.updateViewLayout(overlayView, params)
+                            Log.v(TAG, "📍 Widget moved to (${params.x}, ${params.y})")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "⚠️ Failed to update widget position", e)
+                        }
                     }
                     true
                 }
@@ -357,8 +444,19 @@ class FloatingWidgetService : Service() {
         Log.i(TAG, "🗑️ Removing widget - stopping service")
         Toast.makeText(this, "🗑️ Widget removed", Toast.LENGTH_SHORT).show()
 
+        // Clean up ScreenshotHelper resources
+        try {
+            ScreenshotHelper.cleanup()
+            Log.d(TAG, "✅ ScreenshotHelper cleaned up")
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ Error cleaning up ScreenshotHelper", e)
+        }
+
+        // Clean up clipboard helper
+        clipboardHelper.cleanup()
+
         // Send broadcast to MainActivity to update UI
-        notifyMainActivity()
+        notifyMainActivity("WIDGET_SERVICE_STOPPED")
 
         stopSelf()
     }
@@ -402,8 +500,270 @@ class FloatingWidgetService : Service() {
         Log.d(TAG, "🔄 Widget toggle completed - expanded: $isExpanded")
     }
 
+    // ==================== CLIPBOARD FUNCTIONALITY ====================
+
+    private fun toggleFocusMode(enableFocus: Boolean, duration: Long = focusToggleDuration) {
+        Log.d(TAG, "🎯 Toggling focus mode: enableFocus=$enableFocus, duration=$duration")
+
+        try {
+            // Common flags
+            val baseFlags = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
+
+            params.flags = if (enableFocus) {
+                baseFlags or WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
+            } else {
+                baseFlags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            }
+
+            windowManager.updateViewLayout(overlayView, params)
+            isInFocusableMode = enableFocus
+
+            updateRefreshButtonState(enableFocus)
+
+            Log.d(TAG, "✅ Switched to ${if (enableFocus) "FOCUSABLE" else "NON-FOCUSABLE"} mode")
+
+            // Schedule toggle back if needed
+            focusToggleHandler?.removeCallbacksAndMessages(null)
+            if (enableFocus) {
+                focusToggleHandler = Handler(Looper.getMainLooper())
+                focusToggleHandler?.postDelayed({
+                    toggleFocusMode(false, 0)
+                }, duration)
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error toggling focus mode: ${e.message}", e)
+        }
+    }
+    private fun updateRefreshButtonState(isRefreshing: Boolean) {
+        mainHandler.post {
+            if (isRefreshing) {
+                refreshButton.alpha = 1.0f
+                refreshButton.setBackgroundResource(R.drawable.ic_refresh_active) // You'll need this drawable
+            } else {
+                refreshButton.alpha = 0.7f
+                refreshButton.setBackgroundResource(R.drawable.ic_refresh) // You'll need this drawable
+            }
+        }
+    }
+
+    private fun performManualClipboardRefresh() {
+        Log.d(TAG, "🔄 Manual clipboard refresh triggered")
+
+        if (isInFocusableMode) {
+            Log.d(TAG, "Already in focusable mode, just refreshing clipboard")
+            refreshClipboardData()
+            return
+        }
+
+        // Toggle to focusable mode temporarily
+        toggleFocusMode(true, 2500L) // Give extra time for manual refresh
+
+        // Wait a bit for focus change to take effect, then refresh
+        mainHandler.postDelayed({
+            refreshClipboardData()
+        }, 200)
+
+        Toast.makeText(this, "🔄 Refreshing clipboard...", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun performSmartClipboardRefresh() {
+        Log.d(TAG, "🧠 Smart clipboard refresh triggered")
+
+        val currentTime = System.currentTimeMillis()
+
+        // Avoid too frequent smart refreshes
+        if (currentTime - lastClipboardCheck < 1000) {
+            Log.d(TAG, "Smart refresh too soon, skipping")
+            return
+        }
+
+        lastClipboardCheck = currentTime
+
+        if (!isInFocusableMode) {
+            // Quick toggle for smart refresh
+            toggleFocusMode(true, 1500L)
+
+            mainHandler.postDelayed({
+                refreshClipboardData()
+            }, 100)
+        } else {
+            // Already focusable, just refresh
+            refreshClipboardData()
+        }
+    }
+
+    private fun refreshClipboardData() {
+        Log.d(TAG, "📋 Refreshing clipboard data...")
+
+        try {
+            if (!clipboardHelper.isInitialized()) {
+                Log.w(TAG, "ClipboardHelper not initialized, initializing now")
+                clipboardHelper.initialize(applicationContext)
+                return
+            }
+
+            // Force check current clipboard content
+            clipboardHelper.forceCheckClipboard()
+
+            val historySize = clipboardHelper.getHistory().size
+            Log.d(TAG, "✅ Clipboard refreshed. History size: $historySize")
+
+            if (historySize > 0) {
+                Toast.makeText(this, "📋 Found ${historySize} clipboard items", Toast.LENGTH_SHORT).show()
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error refreshing clipboard: ${e.message}", e)
+        }
+    }
+
+    private fun startSmartClipboardDetection() {
+        Log.d(TAG, "🧠 Starting smart clipboard detection")
+
+        smartDetectionHandler = Handler(Looper.getMainLooper())
+
+        val smartDetectionRunnable = object : Runnable {
+            override fun run() {
+                if (isSmartDetectionEnabled && !isInFocusableMode) {
+                    // Only do smart detection when we're in non-focusable mode
+                    detectClipboardActivity()
+                }
+
+                // Schedule next check
+                smartDetectionHandler?.postDelayed(this, smartCheckInterval)
+            }
+        }
+
+        // Start the detection loop
+        smartDetectionHandler?.postDelayed(smartDetectionRunnable, smartCheckInterval)
+    }
+
+    private fun detectClipboardActivity() {
+        // This is where we can add heuristics to detect when clipboard might have changed
+        // For now, we'll use a simple time-based approach, but you can enhance this
+
+        val currentTime = System.currentTimeMillis()
+
+        // If it's been a while since last check and user might be active, do a smart refresh
+        if (currentTime - lastClipboardCheck > 10000) { // 10 seconds
+            Log.d(TAG, "🔍 Smart detection: Performing periodic clipboard check")
+            performSmartClipboardRefresh()
+        }
+    }
+
+    private fun initializeClipboardHelper() {
+        Log.d(TAG, "=== INITIALIZING CLIPBOARD HELPER IN SERVICE ===")
+
+        mainHandler.post {
+            try {
+                if (!AccessibilityUtils.isAccessibilityServiceEnabled(this)) {
+                    Toast.makeText(this, "Please enable Clipboard Accessibility service in Settings → Accessibility.", Toast.LENGTH_LONG).show()
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                } else {
+                    clipboardHelper.initialize(applicationContext)
+
+                    clipboardHelper.setOnHistoryChangedCallback {
+                        Log.d(TAG, "📋 Clipboard history changed! New size: ${clipboardHelper.getHistory().size}")
+                    }
+
+                    Log.d(TAG, "✅ Clipboard helper initialized in service")
+
+                    mainHandler.postDelayed({
+                        checkClipboardStatus()
+                    }, 2000)
+                }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Error initializing clipboard helper: ${e.message}", e)
+            }
+        }
+    }
+
+    private fun checkClipboardStatus() {
+        Log.d(TAG, "=== CHECKING CLIPBOARD STATUS ===")
+        try {
+            val isInitialized = clipboardHelper.isInitialized()
+            val historySize = clipboardHelper.getHistory().size
+            Log.d(TAG, "Clipboard initialized: $isInitialized, History size: $historySize")
+            clipboardHelper.debugState()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking clipboard status: ${e.message}")
+        }
+    }
+
+    private fun openClipboardHistory() {
+        Log.d(TAG, "=== OPENING CLIPBOARD HISTORY ===")
+
+        val history = clipboardHelper.getHistory()
+        Log.d(TAG, "Current clipboard history size: ${history.size}")
+
+        if (!clipboardHelper.isInitialized()) {
+            Log.w(TAG, "❌ ClipboardHelper not initialized")
+            Toast.makeText(this, "Clipboard service not ready. Please try refresh button.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        if (history.isEmpty()) {
+            Log.d(TAG, "❌ Clipboard history is empty")
+            Toast.makeText(this, "No clipboard history. Try copying some text first, then use refresh button.", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        Log.d(TAG, "✅ Found ${history.size} clipboard items")
+
+        // Check accessibility service
+        val isAccessibilityEnabled = AccessibilityUtils.isAccessibilityServiceEnabled(this)
+        if (!isAccessibilityEnabled) {
+            Toast.makeText(this, "Enable Accessibility Service for auto-paste", Toast.LENGTH_LONG).show()
+        }
+
+        // Start clipboard overlay
+        try {
+            val intent = Intent(this, ClipboardOverlayService::class.java)
+            startService(intent)
+            Log.d(TAG, "✅ Started ClipboardOverlayService")
+
+            // Hide this widget temporarily
+            overlayView.visibility = View.INVISIBLE
+
+            // Show widget again after timeout
+            mainHandler.postDelayed({
+                if (overlayView.visibility == View.INVISIBLE) {
+                    Log.d(TAG, "Fallback: Showing widget again after timeout")
+                    showWidget()
+                }
+            }, 1500)
+
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to start ClipboardOverlayService: ${e.message}", e)
+            Toast.makeText(this, "Failed to open clipboard history", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // ==================== BUTTON CLICK LISTENERS ====================
+
     private fun setupButtonClickListeners() {
         Log.d(TAG, "🔘 Setting up button click listeners...")
+
+        // Clipboard refresh button
+        if (::refreshButton.isInitialized) {
+            refreshButton.setOnClickListener {
+                Log.d(TAG, "🔄 Refresh button clicked")
+                performManualClipboardRefresh()
+            }
+
+            // Long press on refresh button to toggle smart detection
+            refreshButton.setOnLongClickListener {
+                isSmartDetectionEnabled = !isSmartDetectionEnabled
+                val status = if (isSmartDetectionEnabled) "enabled" else "disabled"
+                Toast.makeText(this, "Smart clipboard detection $status", Toast.LENGTH_SHORT).show()
+                Log.d(TAG, "🧠 Smart detection toggled: $isSmartDetectionEnabled")
+                true
+            }
+        }
 
         // Screenshot region button
         overlayView.findViewById<Button>(R.id.btn_screenshot_region)?.setOnClickListener {
@@ -417,67 +777,120 @@ class FloatingWidgetService : Service() {
             handleOCRRequest()
         }
 
+        // Clipboard History button
+        overlayView.findViewById<Button>(R.id.btn_clipboard_history)?.setOnClickListener {
+            Log.d(TAG, "📋 Clipboard History button clicked")
+
+            // Force refresh before opening history
+            if (!isInFocusableMode) {
+                performSmartClipboardRefresh()
+                // Delay opening history to allow refresh
+                mainHandler.postDelayed({
+                    openClipboardHistory()
+                }, 500)
+            } else {
+                refreshClipboardData()
+                mainHandler.postDelayed({
+                    openClipboardHistory()
+                }, 200)
+            }
+        }
+
+
+
         Log.d(TAG, "✅ Button click listeners configured")
     }
 
     private fun handleScreenshotRequest() {
         Log.d(TAG, "📸 Processing screenshot request...")
-
-        if (!ScreenshotHelper.isMediaProjectionReady()) {
-            Log.w(TAG, "⚠️ MediaProjection not ready")
-            Toast.makeText(this, "⚠️ Screen capture not ready. Please restart app.", Toast.LENGTH_LONG).show()
-            return
-        }
-
-        try {
-            Log.d(TAG, "🚀 Starting region capture...")
-            startRegionCapture()
-            Log.i(TAG, "✅ Screenshot capture initiated successfully")
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to start screenshot capture", e)
-            Toast.makeText(this, "❌ Failed to start screenshot", Toast.LENGTH_SHORT).show()
-        }
+        handleCaptureRequest("screenshot")
     }
 
     private fun handleOCRRequest() {
         Log.d(TAG, "📝 Processing OCR request...")
+        handleCaptureRequest("ocr")
+    }
 
+    private fun handleCaptureRequest(mode: String) {
+        Log.d(TAG, "🎬 Processing capture request for mode: $mode")
+
+        // Check if we need new permission (Android 15 requirement)
+        if (ScreenshotHelper.needsNewPermission()) {
+            Log.w(TAG, "🔐 MediaProjection permission needed - requesting from MainActivity")
+            requestNewPermission(mode)
+            return
+        }
+
+        // Check if MediaProjection is ready
         if (!ScreenshotHelper.isMediaProjectionReady()) {
-            Log.w(TAG, "⚠️ MediaProjection not ready for OCR")
-            Toast.makeText(this, "⚠️ Screen capture not ready. Please restart app.", Toast.LENGTH_LONG).show()
+            Log.w(TAG, "⚠️ MediaProjection not ready - requesting from MainActivity")
+            requestNewPermission(mode)
             return
         }
 
         try {
-            Log.d(TAG, "🚀 Starting OCR capture...")
-            startOCRCapture()
-            Log.i(TAG, "✅ OCR capture initiated successfully")
+            Log.d(TAG, "🚀 Starting capture for mode: $mode")
+            startCapture(mode)
+            Log.i(TAG, "✅ Capture initiated successfully for mode: $mode")
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to start OCR capture", e)
-            Toast.makeText(this, "❌ Failed to start text extraction", Toast.LENGTH_SHORT).show()
+            Log.e(TAG, "❌ Failed to start capture for mode: $mode", e)
+            Toast.makeText(this, "❌ Failed to start $mode", Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun startRegionCapture() {
-        Log.d(TAG, "📸 Launching DrawingOverlayService for screenshot...")
+    private fun requestNewPermission(mode: String) {
+        Log.d(TAG, "🔐 Requesting new MediaProjection permission for mode: $mode")
 
-        val intent = Intent(this, DrawingOverlayService::class.java).apply {
-            putExtra("mode", "screenshot")
+        if (isWaitingForPermission) {
+            Log.w(TAG, "⏳ Already waiting for permission")
+            Toast.makeText(this, "⏳ Permission request in progress...", Toast.LENGTH_SHORT).show()
+            return
         }
 
-        startService(intent)
-        hideWidgetTemporarily("screenshot capture")
+        if (permissionRetryCount >= MAX_PERMISSION_RETRIES) {
+            Log.e(TAG, "❌ Maximum permission retries reached")
+            Toast.makeText(this, "❌ Permission request failed. Please restart the app.", Toast.LENGTH_LONG).show()
+            resetPermissionState()
+            return
+        }
+
+        isWaitingForPermission = true
+        pendingCaptureMode = mode
+        permissionRetryCount++
+
+        // Show user feedback
+        Toast.makeText(this, "🔐 Requesting screen capture permission...", Toast.LENGTH_SHORT).show()
+
+        // Request new permission from MainActivity
+        val intent = Intent("REQUEST_NEW_MEDIA_PROJECTION").apply {
+            putExtra("mode", mode)
+            putExtra("retryCount", permissionRetryCount)
+        }
+        sendBroadcast(intent)
+
+        // Set timeout for permission request
+        mainHandler.postDelayed({
+            if (isWaitingForPermission) {
+                Log.w(TAG, "⏰ Permission request timeout")
+                handlePermissionTimeout()
+            }
+        }, PERMISSION_RETRY_DELAY * 3) // 6 seconds timeout
     }
 
-    private fun startOCRCapture() {
-        Log.d(TAG, "📝 Launching DrawingOverlayService for OCR...")
+    private fun startCapture(mode: String) {
+        Log.d(TAG, "🎬 Launching DrawingOverlayService for $mode...")
 
         val intent = Intent(this, DrawingOverlayService::class.java).apply {
-            putExtra("mode", "ocr")
+            putExtra("mode", mode)
         }
 
-        startService(intent)
-        hideWidgetTemporarily("OCR capture")
+        try {
+            startService(intent)
+            hideWidgetTemporarily(mode)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to start DrawingOverlayService for $mode", e)
+            Toast.makeText(this, "❌ Failed to start region selection", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun hideWidgetTemporarily(reason: String) {
@@ -494,13 +907,104 @@ class FloatingWidgetService : Service() {
         }, WIDGET_HIDE_TIMEOUT)
     }
 
+    private fun handleCaptureComplete() {
+        Log.d(TAG, "📸 Handling capture completion")
+        showWidget()
+        resetPermissionState()
+    }
+
+    private fun handleOCRComplete(intent: Intent) {
+        Log.d(TAG, "📝 Handling OCR completion")
+        showWidget()
+        resetPermissionState()
+
+        val extractedText = intent.getStringExtra("extracted_text")
+        if (!extractedText.isNullOrEmpty()) {
+            Toast.makeText(this, "✅ Text extracted: ${extractedText.take(50)}...", Toast.LENGTH_SHORT).show()
+        }
+
+        // Trigger manual clipboard refresh after OCR
+        Log.d(TAG, "After OCR complete Triggering Manual Clipboard Refresh >>")
+        performManualClipboardRefresh()
+    }
+
+    private fun handleMediaProjectionReady() {
+        Log.d(TAG, "🎬 MediaProjection ready - processing pending operations")
+
+        if (isWaitingForPermission && pendingCaptureMode != null) {
+            Log.d(TAG, "🚀 Processing pending capture: $pendingCaptureMode")
+
+            val mode = pendingCaptureMode!!
+            resetPermissionState()
+
+            // Small delay to ensure MediaProjection is fully ready
+            mainHandler.postDelayed({
+                startCapture(mode)
+            }, 500)
+        } else {
+            Log.d(TAG, "ℹ️ No pending operations to process")
+            resetPermissionState()
+        }
+    }
+
+    private fun handleMediaProjectionExpired() {
+        Log.w(TAG, "⏰ MediaProjection expired - resetting state")
+
+        Toast.makeText(this, "⏰ Screen capture permission expired", Toast.LENGTH_SHORT).show()
+        resetPermissionState()
+
+        // Update widget state to show permission is needed
+        updateWidgetState(false)
+    }
+
+    private fun handlePermissionDenied() {
+        Log.w(TAG, "❌ Permission denied by user")
+
+        Toast.makeText(this, "❌ Screen capture permission denied", Toast.LENGTH_LONG).show()
+        resetPermissionState()
+
+        // Update widget state
+        updateWidgetState(false)
+    }
+
+    private fun handlePermissionTimeout() {
+        Log.w(TAG, "⏰ Permission request timeout")
+
+        Toast.makeText(this, "⏰ Permission request timeout. Please try again.", Toast.LENGTH_LONG).show()
+        resetPermissionState()
+    }
+
+    private fun resetPermissionState() {
+        Log.d(TAG, "🔄 Resetting permission state")
+
+        isWaitingForPermission = false
+        pendingCaptureMode = null
+        permissionRetryCount = 0
+    }
+
+    private fun updateWidgetState(hasPermission: Boolean) {
+        Log.d(TAG, "🔄 Updating widget state - hasPermission: $hasPermission")
+
+        mainHandler.post {
+            // Update widget appearance based on permission state
+            overlayView.alpha = if (hasPermission) 0.7f else 0.5f
+
+            // You could also disable buttons or show different visual states
+            overlayView.findViewById<Button>(R.id.btn_screenshot_region)?.isEnabled = hasPermission
+            overlayView.findViewById<Button>(R.id.btn_ocr)?.isEnabled = hasPermission
+        }
+    }
+
     fun showWidget() {
         Log.d(TAG, "👁️ Showing widget")
 
         mainHandler.post {
             overlayView.visibility = View.VISIBLE
             expandedButtons.visibility = View.GONE
-            overlayView.alpha = 0.7f
+
+            // Update state based on current permission status
+            val hasPermission = ScreenshotHelper.isMediaProjectionReady() && !ScreenshotHelper.needsNewPermission()
+            overlayView.alpha = if (hasPermission) 0.7f else 0.5f
             isExpanded = false
 
             // Hide delete zone if it's showing
@@ -544,11 +1048,18 @@ class FloatingWidgetService : Service() {
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setOngoing(true)
             .setShowWhen(false)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
 
         try {
+            // CRITICAL: Use correct foreground service type for Android 14+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                )
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
@@ -559,11 +1070,11 @@ class FloatingWidgetService : Service() {
         }
     }
 
-    private fun notifyMainActivity() {
-        Log.d(TAG, "📢 Sending broadcast to MainActivity about service stop")
+    private fun notifyMainActivity(action: String) {
+        Log.d(TAG, "📢 Sending broadcast to MainActivity: $action")
 
         try {
-            val intent = Intent("WIDGET_SERVICE_STOPPED")
+            val intent = Intent(action)
             sendBroadcast(intent)
             Log.d(TAG, "✅ Broadcast sent successfully")
         } catch (e: Exception) {
@@ -574,14 +1085,33 @@ class FloatingWidgetService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "🎯 onStartCommand called with action: ${intent?.action}")
 
+        // Ensure service is properly initialized
+        if (!isServiceInitialized) {
+            Log.w(TAG, "⚠️ Service not initialized, ignoring command")
+            return START_NOT_STICKY
+        }
+
         when (intent?.action) {
+            "START_WIDGET" -> {
+                Log.d(TAG, "🚀 Starting widget")
+                showWidget()
+            }
+            "STOP_WIDGET" -> {
+                Log.d(TAG, "🛑 Stopping widget")
+                stopSelf()
+            }
+            "PERMISSION_READY" -> {
+                Log.d(TAG, "🔐 Permission ready notification received")
+                handleMediaProjectionReady()
+            }
             "INIT_PROJECTION" -> {
-                Log.i(TAG, "🎬 Initializing MediaProjection...")
+                Log.i(TAG, "🎬 Legacy MediaProjection initialization...")
 
                 val resultCode = intent.getIntExtra("resultCode", 0)
                 val dataIntent = intent.getParcelableExtra<Intent>("dataIntent")
 
-                if (dataIntent != null) {
+                if (dataIntent != null && resultCode != 0) {
+                    // Delay initialization to ensure service is fully ready
                     mainHandler.postDelayed({
                         try {
                             ScreenshotHelper.setMediaProjection(
@@ -591,18 +1121,24 @@ class FloatingWidgetService : Service() {
                             )
 
                             if (ScreenshotHelper.isMediaProjectionReady()) {
-                                Log.i(TAG, "✅ MediaProjection initialized successfully")
+                                Log.i(TAG, "✅ Legacy MediaProjection initialized successfully")
                                 Toast.makeText(this, "✅ Screen capture ready", Toast.LENGTH_SHORT).show()
+                                updateWidgetState(true)
                             } else {
-                                Log.e(TAG, "❌ MediaProjection initialization failed")
+                                Log.e(TAG, "❌ Legacy MediaProjection initialization failed")
                                 Toast.makeText(this, "❌ Failed to initialize screen capture", Toast.LENGTH_LONG).show()
+                                updateWidgetState(false)
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "❌ Exception during MediaProjection initialization", e)
+                            Log.e(TAG, "❌ Exception during legacy MediaProjection initialization", e)
+                            Toast.makeText(this, "❌ Screen capture setup failed", Toast.LENGTH_LONG).show()
+                            updateWidgetState(false)
                         }
                     }, 1000)
                 } else {
-                    Log.e(TAG, "❌ DataIntent is null for MediaProjection initialization")
+                    Log.e(TAG, "❌ Invalid data for legacy MediaProjection initialization")
+                    Toast.makeText(this, "❌ Invalid screen capture permissions", Toast.LENGTH_LONG).show()
+                    updateWidgetState(false)
                 }
             }
             "show_widget" -> {
@@ -621,12 +1157,38 @@ class FloatingWidgetService : Service() {
         super.onDestroy()
         Log.i(TAG, "🛑 FloatingWidgetService shutting down...")
 
+        // Reset permission state
+        resetPermissionState()
+
+        // Stop smart clipboard detection
+        smartDetectionHandler?.removeCallbacksAndMessages(null)
+        focusToggleHandler?.removeCallbacksAndMessages(null)
+
+        // Clear permission callback
+        try {
+            ScreenshotHelper.setPermissionCallback(null)
+            Log.d(TAG, "✅ Permission callback cleared")
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ Error clearing permission callback", e)
+        }
+
+        // Clean up ScreenshotHelper resources first
+        try {
+            ScreenshotHelper.cleanup()
+            Log.d(TAG, "✅ ScreenshotHelper cleaned up")
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ Error cleaning up ScreenshotHelper", e)
+        }
+
+        // Clean up clipboard helper
+        clipboardHelper.cleanup()
+
         // Notify MainActivity that service is stopping
-        notifyMainActivity()
+        notifyMainActivity("WIDGET_SERVICE_STOPPED")
 
         try {
             // Unregister broadcast receiver
-            unregisterReceiver(captureCompleteReceiver)
+            unregisterReceiver(serviceReceiver)
             Log.d(TAG, "✅ Broadcast receiver unregistered")
         } catch (e: Exception) {
             Log.w(TAG, "⚠️ Error unregistering broadcast receiver", e)
@@ -655,6 +1217,9 @@ class FloatingWidgetService : Service() {
 
         // Clear handlers
         mainHandler.removeCallbacksAndMessages(null)
+
+        // Send broadcast to stop heartbeat
+        sendBroadcast(Intent("action.STOP_HEARTBEAT"))
 
         Log.i(TAG, "✅ FloatingWidgetService destroyed successfully")
     }

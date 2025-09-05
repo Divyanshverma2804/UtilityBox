@@ -16,7 +16,7 @@ class ClipboardHelper private constructor() {
     companion object {
         @Volatile
         private var INSTANCE: ClipboardHelper? = null
-        private const val MAX_HISTORY_SIZE = 10
+        private const val MAX_HISTORY_SIZE = 20
         private const val TAG = "ClipboardHelper"
 
         fun getInstance(): ClipboardHelper {
