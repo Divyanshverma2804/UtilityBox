@@ -38,10 +38,12 @@
 <!--                android:background="@drawable/app_icon_background"-->
 <!--                android:layout_marginBottom="16dp"/>-->
             <ImageView
+                android:id="@+id/app_icon"
                 android:layout_width="64dp"
                 android:layout_height="64dp"
                 android:src="@mipmap/rock_clip"
-                android:layout_marginBottom="16dp" />
+                android:layout_marginBottom="16dp"/>
+
 
             <!-- App Title -->
             <TextView

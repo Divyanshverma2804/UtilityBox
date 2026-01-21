@@ -1,0 +1,32 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:padding="16dp">
+
+    <ImageView
+        android:id="@+id/slide_image"
+        android:layout_width="150dp"
+        android:layout_height="150dp"
+        android:contentDescription="Character"
+        android:layout_marginBottom="12dp"/>
+
+    <TextView
+        android:id="@+id/slide_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Character Name"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:textColor="#1A237E"
+        android:layout_marginBottom="4dp"/>
+
+    <TextView
+        android:id="@+id/slide_caption"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Fun caption here"
+        android:textSize="14sp"
+        android:textColor="#555555"/>
+</LinearLayout>

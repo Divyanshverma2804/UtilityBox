@@ -15,12 +15,14 @@
         android:gravity="center"
         android:padding="8dp">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="📸"
-            android:textSize="20sp"
-            android:textColor="#00FFFF" />
+        <ImageView
+            android:layout_width="35dp"
+            android:layout_height="35dp"
+            android:src="@mipmap/rock_clip_round"
+            android:duplicateParentState="true"
+            android:clickable="false"
+            android:focusable="false" />
+
         <!-- Smart Refresh Button -->
         <ImageButton
             android:id="@+id/btn_refresh_clipboard"
@@ -48,35 +50,57 @@
         <!-- Screenshot Region Button -->
         <Button
             android:id="@+id/btn_screenshot_region"
-            android:layout_width="120dp"
+            android:layout_width="wrap_content"
             android:layout_height="40dp"
-            android:text="📸 Region"
+            android:text="Region"
             android:textSize="12sp"
             android:textColor="#FFFFFF"
             android:background="@drawable/button_screenshot_bg"
+            android:drawableLeft="@mipmap/snappy_round"
+            android:drawablePadding="6dp"
+            android:paddingEnd="12dp"
+            android:paddingRight="12dp"
             android:layout_marginBottom="4dp" />
+
 
         <!-- OCR Button -->
         <Button
             android:id="@+id/btn_ocr"
-            android:layout_width="120dp"
+            android:layout_width="wrap_content"
             android:layout_height="40dp"
-            android:text="🔤 Extract Text"
+            android:text="Extract"
             android:textSize="12sp"
             android:textColor="#FFFFFF"
             android:background="@drawable/button_ocr_bg"
+            android:drawableLeft="@mipmap/lexi_round"
+            android:drawablePadding="6dp"
+            android:paddingEnd="12dp"
+            android:paddingRight="12dp"
             android:layout_marginBottom="4dp" />
 
+<!--        <Button-->
+<!--            android:id="@+id/btn_clipboard_history"-->
+<!--            android:layout_width="120dp"-->
+<!--            android:layout_height="36dp"-->
+<!--            android:text="📋 Clipboard"-->
+<!--            android:textSize="12sp"-->
+<!--            android:background="@drawable/button_clipboard_bg"-->
+<!--            android:textColor="#FFFFFF"-->
+<!--            android:layout_marginBottom="4dp"-->
+<!--            android:minHeight="0dp" />-->
         <Button
             android:id="@+id/btn_clipboard_history"
-            android:layout_width="120dp"
-            android:layout_height="36dp"
-            android:text="📋 Clipboard"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:text="Clipboard"
             android:textSize="12sp"
-            android:background="@drawable/button_clipboard_bg"
             android:textColor="#FFFFFF"
-            android:layout_marginBottom="4dp"
-            android:minHeight="0dp" />
+            android:background="@drawable/button_clipboard_bg"
+            android:drawableLeft="@mipmap/clippy_jr_round"
+            android:drawablePadding="6dp"
+            android:paddingEnd="12dp"
+            android:paddingRight="12dp"
+            android:layout_marginBottom="4dp" />
 
 
         <!-- Action Buttons Row -->

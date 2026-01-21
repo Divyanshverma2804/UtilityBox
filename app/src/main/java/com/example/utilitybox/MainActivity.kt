@@ -14,6 +14,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.Switch
 import android.widget.Toast
 import androidx.annotation.RequiresApi
@@ -61,7 +62,12 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         Log.d(TAG, "MainActivity onCreate started")
 
+
         setContentView(R.layout.activity_main)
+        showIntroSlideshow()
+        findViewById<ImageView>(R.id.app_icon).setOnClickListener {
+            showIntroSlideshow()
+        }
 
         startButton = findViewById(R.id.btn_start_widget)
         debugToggleSwitch = findViewById(R.id.switch_debug_images)
@@ -170,6 +176,30 @@ class MainActivity : AppCompatActivity() {
             Log.d(TAG, "Accessibility service is enabled")
         }
     }
+
+    private fun showIntroSlideshow() {
+        val dialogView = layoutInflater.inflate(R.layout.dialog_slideshow, null)
+        val dialog = androidx.appcompat.app.AlertDialog.Builder(this)
+            .setView(dialogView)
+            .create()
+
+
+        val slides = listOf(
+            Slide(R.mipmap.snappy, "Snappy", "Fast & sharp – captures any region instantly!"),
+            Slide(R.mipmap.lexi, "Lexi", "Playful & text-focused – loves pulling words from screens!"),
+            Slide(R.mipmap.clippy_jr, "Clippy Jr.", "Your modern clipboard buddy – remembers everything!")
+        )
+
+        val viewPager = dialogView.findViewById<androidx.viewpager2.widget.ViewPager2>(R.id.view_pager)
+        viewPager.adapter = SlideshowAdapter(slides)
+
+        dialogView.findViewById<Button>(R.id.btn_close).setOnClickListener {
+            dialog.dismiss()
+        }
+
+        dialog.show()
+    }
+
 
     private fun checkPermissionsAndStart() {
         Log.d(TAG, "checkPermissionsAndStart() called")
