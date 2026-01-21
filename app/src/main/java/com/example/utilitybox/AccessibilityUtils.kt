@@ -11,11 +11,19 @@ import android.view.accessibility.AccessibilityManager
 object AccessibilityUtils {
 
     fun isAccessibilityServiceEnabled(context: Context): Boolean {
-        val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
-        val enabledServices = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
-        val expected = ComponentName(context, ClipboardAccessibilityService::class.java)
-            .flattenToString()   // "com.example.utilitybox/com.example.utilitybox.ClipboardAccessibilityService"
-        return enabledServices.any { it.id.equals(expected, ignoreCase = true) }
+        val expectedComponent = ComponentName(
+            context,
+            ClipboardAccessibilityService::class.java
+        ).flattenToString()
+    
+        val enabledServices = Settings.Secure.getString(
+            context.contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+    
+        return enabledServices
+            .split(':')
+            .any { it.equals(expectedComponent, ignoreCase = true) }
     }
 
 
