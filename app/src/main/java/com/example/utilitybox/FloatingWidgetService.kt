@@ -694,54 +694,46 @@ class FloatingWidgetService : Service() {
         }
     }
 
-    private fun openClipboardHistory() {
-        Log.d(TAG, "=== OPENING CLIPBOARD HISTORY ===")
+private fun openClipboardHistory() {
+    Log.d(TAG, "=== OPENING CLIPBOARD HISTORY ===")
 
-        val history = clipboardHelper.getHistory()
-        Log.d(TAG, "Current clipboard history size: ${history.size}")
-
-        if (!clipboardHelper.isInitialized()) {
-            Log.w(TAG, "❌ ClipboardHelper not initialized")
-            Toast.makeText(this, "Clipboard service not ready. Please try refresh button.", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        if (history.isEmpty()) {
-            Log.d(TAG, "❌ Clipboard history is empty")
-            Toast.makeText(this, "No clipboard history. Try copying some text first, then use refresh button.", Toast.LENGTH_LONG).show()
-            return
-        }
-
-        Log.d(TAG, "✅ Found ${history.size} clipboard items")
-
-        // Check accessibility service
-        val isAccessibilityEnabled = AccessibilityUtils.isAccessibilityServiceEnabled(this)
-        if (!isAccessibilityEnabled) {
-            Toast.makeText(this, "Enable Accessibility Service for auto-paste", Toast.LENGTH_LONG).show()
-        }
-
-        // Start clipboard overlay
-        try {
-            val intent = Intent(this, ClipboardOverlayService::class.java)
-            startService(intent)
-            Log.d(TAG, "✅ Started ClipboardOverlayService")
-
-            // Hide this widget temporarily
-            overlayView.visibility = View.INVISIBLE
-
-            // Show widget again after timeout
-            mainHandler.postDelayed({
-                if (overlayView.visibility == View.INVISIBLE) {
-                    Log.d(TAG, "Fallback: Showing widget again after timeout")
-                    showWidget()
-                }
-            }, 1500)
-
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to start ClipboardOverlayService: ${e.message}", e)
-            Toast.makeText(this, "Failed to open clipboard history", Toast.LENGTH_SHORT).show()
-        }
+    if (!clipboardHelper.isInitialized()) {
+        Toast.makeText(this, "Clipboard service not ready. Try refresh.", Toast.LENGTH_SHORT).show()
+        return
     }
+
+    val history = clipboardHelper.getHistory()
+    Log.d(TAG, "Clipboard history size: ${history.size}")
+
+    //  DO NOT BLOCK UI ON EMPTY STATE
+    if (history.isEmpty()) {
+        Log.d(TAG, " Clipboard history empty – showing empty state")
+        Toast.makeText(
+            this,
+            "Clipboard is empty. Copy something to see it here.",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
+    try {
+        val intent = Intent(this, ClipboardOverlayService::class.java)
+        startService(intent)
+        Log.d(TAG, "✅ ClipboardOverlayService started")
+
+        overlayView.visibility = View.INVISIBLE
+
+        mainHandler.postDelayed({
+            if (overlayView.visibility == View.INVISIBLE) {
+                showWidget()
+            }
+        }, 1500)
+
+    } catch (e: Exception) {
+        Log.e(TAG, "❌ Failed to open clipboard history", e)
+        Toast.makeText(this, "Failed to open clipboard", Toast.LENGTH_SHORT).show()
+    }
+}
+
 
     // ==================== BUTTON CLICK LISTENERS ====================
 
